@@ -1,0 +1,5 @@
+dist/
+*.exe
+BattleEye/settings.txt
+BattleEye/stats.txt
+BattleEye/props_dump.txt
