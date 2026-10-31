@@ -1,6 +1,8 @@
-# Battle Eye
+# Fechtbuch
 
 A combat HUD mod for **Half Sword** (Steam, Early Access). It shows what the game normally hides: health, consciousness, stamina, pain, bleeding, broken bones, dislocations and damage, for you and for the enemy you tag.
+
+*A Fechtbuch ("fight book") is a medieval German fencing manual, the kind of treatise half-swording techniques come from.*
 
 ## Features
 
@@ -23,33 +25,33 @@ A combat HUD mod for **Half Sword** (Steam, Early Access). It shows what the gam
 
 ## Install
 
-1. Download **`BattleEyeInstaller.exe`** from the [latest release](../../releases/latest).
+1. Download **`FechtbuchInstaller.exe`** from the [latest release](../../releases/latest).
 2. Close Half Sword and run the installer, then choose **1**.
 3. Start the game and fight.
 
-The installer finds Half Sword through your Steam libraries, installs [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) (the mod loader) if you don't have it, installs Battle Eye and enables it. Your Battle Eye settings are kept when you update.
+The installer finds Half Sword through your Steam libraries, installs [UE4SS](https://github.com/UE4SS-RE/RE-UE4SS) (the mod loader) if you don't have it, installs Fechtbuch and enables it. Your settings are kept when you update, including settings from the older "Battle Eye" version, which the installer replaces.
 
 Windows SmartScreen may warn about the installer because it isn't code-signed: click **More info → Run anyway**.
 
 ### Manual install
 
 1. Install the UE4SS experimental build into `Half Sword\HalfswordUE5\Binaries\Win64` (so `dwmapi.dll` and the `ue4ss` folder sit next to the game's `.exe`).
-2. Download `BattleEye-mod.zip` from the release and extract it into `Win64\ue4ss\Mods\` so you get `Mods\BattleEye\Scripts\main.lua`.
-3. Add `BattleEye : 1` to `Win64\ue4ss\Mods\mods.txt` above the `; Built-in keybinds` line.
+2. Download `Fechtbuch-mod.zip` from the release and extract it into `Win64\ue4ss\Mods\` so you get `Mods\Fechtbuch\Scripts\main.lua`.
+3. Add `Fechtbuch : 1` to `Win64\ue4ss\Mods\mods.txt` above the `; Built-in keybinds` line.
 
 ## Keys
 
 | Key | Action |
 |---|---|
 | Z | Tag / untag the enemy you're looking at |
-| Home | Open / close the Battle Eye menu (arrows to change, Enter to toggle) |
+| Home | Open / close the Fechtbuch menu (arrows to change, Enter to toggle) |
 | F7 | HUD on / off |
 | F8 | Reset damage counters |
 | F9 | Save every property of your fighter to `props_dump.txt` (for troubleshooting) |
 
 ## Uninstall
 
-Run the installer and choose **2** (Battle Eye only) or **3** (Battle Eye and UE4SS).
+Run the installer and choose **2** (Fechtbuch only) or **3** (Fechtbuch and UE4SS).
 
 ## Notes
 
@@ -57,7 +59,7 @@ Run the installer and choose **2** (Battle Eye only) or **3** (Battle Eye and UE
 - Weight is the physics mass of the body and height is measured from the head to the feet, so both are close estimates.
 - Damage dealt counts health lost by enemies, so it assumes enemies don't hurt each other.
 - The game doesn't expose its own maximum for strength and skill progress; the bars treat 100% as the cap.
-- If the in-game HUD doesn't show, right-click `ue4ss\Mods\BattleEye\overlay.ps1` → *Run with PowerShell* for a separate stats window (run the game in borderless/windowed mode).
+- If the in-game HUD doesn't show, right-click `ue4ss\Mods\Fechtbuch\overlay.ps1` → *Run with PowerShell* for a separate stats window (run the game in borderless/windowed mode).
 
 ## Building the installer
 
@@ -65,7 +67,7 @@ Run the installer and choose **2** (Battle Eye only) or **3** (Battle Eye and UE
 powershell -ExecutionPolicy Bypass -File installer\build.ps1
 ```
 
-This downloads the latest UE4SS experimental build, packs it with the mod into `dist\BattleEyeInstaller.exe` and writes `dist\BattleEye-mod.zip`. Pass `-UE4SSZip <path>` to use a specific UE4SS zip. Needs only Windows and the .NET Framework compiler that ships with it.
+This downloads the latest UE4SS experimental build, packs it with the mod into `dist\FechtbuchInstaller.exe` and writes `dist\Fechtbuch-mod.zip`. Pass `-UE4SSZip <path>` to use a specific UE4SS zip. Needs only Windows and the .NET Framework compiler that ships with it.
 
 ## Credits
 

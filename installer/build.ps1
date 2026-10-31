@@ -1,4 +1,4 @@
-# Builds dist\BattleEyeInstaller.exe and dist\BattleEye-mod.zip.
+# Builds dist\FechtbuchInstaller.exe and dist\Fechtbuch-mod.zip.
 #   powershell -ExecutionPolicy Bypass -File installer\build.ps1 [-UE4SSZip path\to\UE4SS_v*.zip]
 # Without -UE4SSZip the latest UE4SS experimental build is downloaded from GitHub.
 param([string]$UE4SSZip)
@@ -10,14 +10,14 @@ $dist  = Join-Path $root 'dist'
 $work  = Join-Path $dist 'work'
 New-Item -ItemType Directory -Force $work | Out-Null
 
-# Mod zip (contains the BattleEye folder; never your settings/stats files)
-$modZip = Join-Path $work 'BattleEye.zip'
+# Mod zip (contains the Fechtbuch folder; never your settings/stats files)
+$modZip = Join-Path $work 'Fechtbuch.zip'
 if (Test-Path $modZip) { Remove-Item $modZip }
 $stage = Join-Path $work 'stage'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-New-Item -ItemType Directory -Force (Join-Path $stage 'BattleEye\Scripts') | Out-Null
-Copy-Item (Join-Path $root 'BattleEye\Scripts\main.lua') (Join-Path $stage 'BattleEye\Scripts')
-Copy-Item (Join-Path $root 'BattleEye\overlay.ps1'), (Join-Path $root 'BattleEye\enabled.txt') (Join-Path $stage 'BattleEye')
+New-Item -ItemType Directory -Force (Join-Path $stage 'Fechtbuch\Scripts') | Out-Null
+Copy-Item (Join-Path $root 'Fechtbuch\Scripts\main.lua') (Join-Path $stage 'Fechtbuch\Scripts')
+Copy-Item (Join-Path $root 'Fechtbuch\overlay.ps1'), (Join-Path $root 'Fechtbuch\enabled.txt') (Join-Path $stage 'Fechtbuch')
 [IO.Compression.ZipFile]::CreateFromDirectory($stage, $modZip)
 
 # UE4SS zip
@@ -32,13 +32,13 @@ else {
 
 # Compile
 $fw  = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319"
-$exe = Join-Path $dist 'BattleEyeInstaller.exe'
+$exe = Join-Path $dist 'FechtbuchInstaller.exe'
 & "$fw\csc.exe" /nologo /target:exe /optimize /out:$exe `
     /r:"$fw\System.IO.Compression.dll" /r:"$fw\System.IO.Compression.FileSystem.dll" `
-    /resource:"$modZip,BattleEye.zip" /resource:"$ue4ss,ue4ss.zip" `
+    /resource:"$modZip,Fechtbuch.zip" /resource:"$ue4ss,ue4ss.zip" `
     (Join-Path $PSScriptRoot 'Installer.cs')
 if ($LASTEXITCODE -ne 0) { throw "csc failed" }
 
-Copy-Item $modZip (Join-Path $dist 'BattleEye-mod.zip') -Force
+Copy-Item $modZip (Join-Path $dist 'Fechtbuch-mod.zip') -Force
 Remove-Item $work -Recurse -Force
 Write-Host "Built $exe"

@@ -1,11 +1,11 @@
--- BATTLE EYE: combat HUD for Half Sword (UE4SS Lua mod)
+-- FECHTBUCH: combat HUD for Half Sword (UE4SS Lua mod)
 --   * Your panel: body diagram (limbs colored by health, broken bones pulse, dislocations
 --     violet, fresh hits flash), bars, injury list, damage summary.
 --   * Press Z to tag the enemy under your crosshair (or the nearest one). Only the tagged
 --     enemy gets a stats card (incl. weight, height, strength), a tag over their head and
 --     floating damage numbers. Press Z on them again to untag. Unfocused enemies show nothing.
 --   * Your panel also shows weight/height and strength + skill progress bars.
---   * Home opens the Battle Eye menu: choose what shows, where panels go and how big they are.
+--   * Home opens the Fechtbuch menu: choose what shows, where panels go and how big they are.
 --     Settings are saved to settings.txt next to this mod.
 --
 -- Keys:  Z tag enemy   Home menu (arrows + Enter inside)   F7 HUD on/off   F8 reset counters   F9 dump properties
@@ -124,7 +124,7 @@ local BAR_DEFS = {
 }
 
 local MOD_DIR = (debug.getinfo(1, "S").source:gsub("^@", ""):match("^(.*)[/\\]Scripts[/\\]") or ".")
-local function Log(fmt, ...) print(string.format("[BattleEye] " .. fmt .. "\n", ...)) end
+local function Log(fmt, ...) print(string.format("[Fechtbuch] " .. fmt .. "\n", ...)) end
 
 ---------------------------------------------------------------------------
 -- Settings + menu definition
@@ -157,7 +157,7 @@ local function PanelItems(prefix, pos, scale)
 end
 
 local MENU = { { header = "GENERAL" },
-    { key = "hud",       label = "Battle Eye HUD (F7)", type = "bool", default = true },
+    { key = "hud",       label = "Fechtbuch HUD (F7)", type = "bool", default = true },
     { key = "bgOpacity", label = "Panel background",    type = "num",  min = 0, max = 0.9, step = 0.05, default = 0.45, pct = true },
     { header = "YOUR PANEL" },
 }
@@ -204,7 +204,7 @@ end
 local function SaveSettings()
     local f = io.open(SETTINGS_FILE, "w")
     if not f then return end
-    f:write("-- Battle Eye settings (edit in game with the Home key)\n")
+    f:write("-- Fechtbuch settings (edit in game with the Home key)\n")
     for _, it in ipairs(MENU) do
         if it.key and S[it.key] ~= nil then f:write(it.key .. " = " .. tostring(S[it.key]) .. "\n") end
     end
@@ -826,7 +826,7 @@ local function BuildMenu(tree, canvas)
     Rect(tree, m.w, 0, 0, w, h, COLORS.menuBg, 14)
     Rect(tree, m.w, 0, 0, w, 4, COLORS.hp, 2)
     local title = Label(tree, m.w, 24, 16, 24, COLORS.gold)
-    title:SetText("BATTLE EYE")
+    title:SetText("FECHTBUCH")
     local sub = Label(tree, m.w, 24, 50, 11, COLORS.dim)
     sub:SetText("Choose what shows, where it goes and how big it is. Saved automatically.")
     m.hl = Rect(tree, m.w, 12, top, w - 24, rowH, COLORS.menuSel, 5)
@@ -876,7 +876,7 @@ local function RemoveOldHuds()
         if not list then return end
         for _, w in ipairs(list) do
             local n = w:GetFName():ToString()
-            if n:find("^BattleEye_Root") or n:find("^HSS_Root") then pcall(function() w:RemoveFromParent() end) end
+            if n:find("^Fechtbuch_Root") or n:find("^BattleEye_Root") or n:find("^HSS_Root") then pcall(function() w:RemoveFromParent() end) end
         end
     end)
 end
@@ -887,7 +887,7 @@ local function BuildHud()
     RemoveOldHuds()
 
     local h = {}
-    local root = New("/Script/UMG.UserWidget", gi, "BattleEye_Root_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)), true)
+    local root = New("/Script/UMG.UserWidget", gi, "Fechtbuch_Root_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)), true)
     local tree = New("/Script/UMG.WidgetTree", root)
     root.WidgetTree = tree
     local canvas = New("/Script/UMG.CanvasPanel", tree)
@@ -1141,7 +1141,7 @@ local function Tick()
     local me = player and ReadCharacter(player)
     if not (me and type(me.hp) == "number") or not S.hud then
         HideCombat()
-        if not (me and type(me.hp) == "number") then fileText = "Battle Eye: waiting for your fighter..." end
+        if not (me and type(me.hp) == "number") then fileText = "Fechtbuch: waiting for your fighter..." end
         return
     end
 
@@ -1316,7 +1316,7 @@ end
 local function SafeTick()
     local ok, err = pcall(Tick)
     if not ok then
-        fileText = "Battle Eye error: " .. tostring(err)
+        fileText = "Fechtbuch error: " .. tostring(err)
         if tickNo % 300 == 1 then Log("tick error: %s", tostring(err)) end
     end
     if tickNo % 30 == 0 then WriteFile() end

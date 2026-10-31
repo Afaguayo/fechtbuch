@@ -5,7 +5,7 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $statsFile = Join-Path $PSScriptRoot 'stats.txt'
 
 $form = New-Object Windows.Forms.Form
-$form.Text = 'Battle Eye'
+$form.Text = 'Fechtbuch'
 $form.TopMost = $true
 $form.BackColor = [Drawing.Color]::Black
 $form.Opacity = 0.8

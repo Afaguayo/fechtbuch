@@ -1,5 +1,5 @@
-// Battle Eye installer: finds Half Sword, installs UE4SS if missing, installs/updates the
-// Battle Eye mod and enables it. Run with no arguments for the menu.
+// Fechtbuch installer: finds Half Sword, installs UE4SS if missing, installs/updates the
+// Fechtbuch mod and enables it (and replaces the old "Battle Eye" install). Run with no arguments for the menu.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -15,14 +15,15 @@ static class Installer
 {
     const string GameRelPath = @"steamapps\common\Half Sword\HalfswordUE5\Binaries\Win64";
     const string GameExe = "HalfSwordUE5-Win64-Shipping";
+    const string ModName = "Fechtbuch";
     static readonly string[] UnneededMods = { "CheatManagerEnablerMod", "ConsoleCommandsMod", "ConsoleEnablerMod" };
 
     static int Main(string[] args)
     {
-        Console.Title = "Battle Eye installer";
+        Console.Title = "Fechtbuch installer";
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.WriteLine();
-        Console.WriteLine("  BATTLE EYE  -  combat HUD for Half Sword");
+        Console.WriteLine("  FECHTBUCH  -  combat HUD for Half Sword");
         Console.ResetColor();
         Console.WriteLine("  ----------------------------------------");
         Console.WriteLine();
@@ -67,9 +68,9 @@ static class Installer
 
     static string Menu()
     {
-        Console.WriteLine("  [1] Install / update Battle Eye");
-        Console.WriteLine("  [2] Uninstall Battle Eye (keep UE4SS)");
-        Console.WriteLine("  [3] Uninstall Battle Eye and UE4SS");
+        Console.WriteLine("  [1] Install / update Fechtbuch");
+        Console.WriteLine("  [2] Uninstall Fechtbuch (keep UE4SS)");
+        Console.WriteLine("  [3] Uninstall Fechtbuch and UE4SS");
         Console.WriteLine();
         Console.Write("  Choose 1, 2 or 3: ");
         string s = (Console.ReadLine() ?? "").Trim();
@@ -94,46 +95,66 @@ static class Installer
             ExtractResource("ue4ss.zip", win64);
         }
 
-        Step("Installing Battle Eye...");
-        ExtractResource("BattleEye.zip", mods);   // settings.txt is not in the zip, so your settings survive updates
+        // Fechtbuch was called "Battle Eye" before 1.1: carry its settings over and remove it
+        string oldDir = Path.Combine(mods, "BattleEye");
+        string newDir = Path.Combine(mods, ModName);
+        if (Directory.Exists(oldDir))
+        {
+            Step("Replacing the old Battle Eye install (settings kept)...");
+            string oldSettings = Path.Combine(oldDir, "settings.txt");
+            if (File.Exists(oldSettings) && !File.Exists(Path.Combine(newDir, "settings.txt")))
+            {
+                Directory.CreateDirectory(newDir);
+                File.Copy(oldSettings, Path.Combine(newDir, "settings.txt"));
+            }
+            Directory.Delete(oldDir, true);
+        }
 
-        Step("Enabling Battle Eye in mods.txt...");
+        Step("Installing Fechtbuch...");
+        ExtractResource("Fechtbuch.zip", mods);   // settings.txt is not in the zip, so your settings survive updates
+
+        Step("Enabling Fechtbuch in mods.txt...");
         string list = Path.Combine(mods, "mods.txt");
         var lines = File.Exists(list) ? File.ReadAllLines(list).ToList() : new List<string>();
+        lines.RemoveAll(l => l.Split(':')[0].Trim() == "BattleEye");
         for (int i = 0; i < lines.Count; i++)
         {
             string name = lines[i].Split(':')[0].Trim();
             if (UnneededMods.Contains(name)) lines[i] = name + " : 0";   // console/cheat mods aren't needed
         }
-        int existing = lines.FindIndex(l => l.Split(':')[0].Trim() == "BattleEye");
-        if (existing >= 0) lines[existing] = "BattleEye : 1";
+        int existing = lines.FindIndex(l => l.Split(':')[0].Trim() == ModName);
+        if (existing >= 0) lines[existing] = ModName + " : 1";
         else
         {
             int at = lines.FindIndex(l => l.StartsWith("; Built-in keybinds"));
             if (at < 0) at = lines.FindIndex(l => l.Split(':')[0].Trim() == "Keybinds");
-            if (at < 0) lines.Add("BattleEye : 1"); else lines.Insert(at, "BattleEye : 1");
+            if (at < 0) lines.Add(ModName + " : 1"); else lines.Insert(at, ModName + " : 1");
         }
         File.WriteAllLines(list, lines);
 
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("  Battle Eye is installed. Start Half Sword and fight!");
+        Console.WriteLine("  Fechtbuch is installed. Start Half Sword and fight!");
         Console.ResetColor();
         Console.WriteLine();
         Console.WriteLine("  Z      tag / untag the enemy you're looking at");
-        Console.WriteLine("  Home   Battle Eye menu (arrows to change, Enter to toggle)");
+        Console.WriteLine("  Home   Fechtbuch menu (arrows to change, Enter to toggle)");
         Console.WriteLine("  F7     HUD on/off      F8 reset counters");
     }
 
     static void UninstallMod(string win64)
     {
         string mods = Path.Combine(win64, "ue4ss", "Mods");
-        string dir = Path.Combine(mods, "BattleEye");
-        if (Directory.Exists(dir)) { Directory.Delete(dir, true); Step("Removed Battle Eye."); }
-        else Step("Battle Eye was not installed.");
+        bool removed = false;
+        foreach (string name in new[] { ModName, "BattleEye" })
+        {
+            string dir = Path.Combine(mods, name);
+            if (Directory.Exists(dir)) { Directory.Delete(dir, true); removed = true; }
+        }
+        Step(removed ? "Removed Fechtbuch." : "Fechtbuch was not installed.");
         string list = Path.Combine(mods, "mods.txt");
         if (File.Exists(list))
-            File.WriteAllLines(list, File.ReadAllLines(list).Where(l => l.Split(':')[0].Trim() != "BattleEye"));
+            File.WriteAllLines(list, File.ReadAllLines(list).Where(l => { string n = l.Split(':')[0].Trim(); return n != ModName && n != "BattleEye"; }));
     }
 
     static void UninstallAll(string win64)
