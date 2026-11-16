@@ -9,17 +9,26 @@ A combat HUD mod for **Half Sword** (Steam, Early Access). It shows what the gam
 **Your panel** (bottom-left by default)
 - Body diagram: every limb is colored by its health (bone-white → yellow → orange → red → dark red), flashes red when hit, pulses when a bone is broken and turns violet when a joint is dislocated.
 - Bars for health, consciousness, stamina, energy, pain and bleeding.
-- Injury list, e.g. `Left arm: BROKEN, Wounded 55%`, plus pain shock and spilled guts.
+- Injury list, e.g. `Left arm: BROKEN, Wounded 55%, healing`, plus pain shock and spilled guts. Each wound says whether it is healing or getting worse.
+- Bleed-out estimate next to the bleeding bar (`out in ~12 s`), from how fast health and consciousness are dropping.
+- Warning in the panel title when you are losing consciousness, bleeding heavily or out of energy.
 - Damage dealt, damage taken, best hit and kills.
-- Weight, height, strength and gear weight.
+- Weight, height, strength and gear weight, plus the raw exhaustion and fear values.
 - Progress bars for strength, weapon skill and body skill, including gain that is still pending.
 
 **Tagged enemy**
 - Press **Z** while looking at an enemy to tag them (Z on them again to untag).
 - Only the tagged enemy gets a stats card (body diagram, bars, injuries, weight, height, strength), a tag over their head and floating damage numbers when you hit them. Untagged enemies show nothing.
 
+**Threat list** (middle-right by default)
+- The three nearest living enemies within 30 m: type (enemy or revenant), distance, health and whether they are to your left, right or behind you.
+
+**Fight recap**
+- When a fight ends (nobody left nearby, or you fall) a short line shows the time, damage dealt and taken, hits, best hit and kills.
+
 **Settings menu** (**Home** key)
 - Turn every piece on or off, move each panel to one of 8 positions, nudge it, and resize it (40-160%).
+- Layout presets: Full, Compact (your bars only) and Duel (your bars plus the enemy card). A preset only switches pieces on or off; positions and sizes stay as you set them.
 - Choose how an enemy gets focused: Z tag only, or Z tag plus lock-on, crosshair or nearest enemy.
 - Settings are saved to `settings.txt` and survive updates.
 
@@ -56,9 +65,11 @@ Run the installer and choose **2** (Fechtbuch only) or **3** (Fechtbuch and UE4S
 ## Notes
 
 - Tested on Half Sword Early Access 0.7 "The Crypts" (0.7.0.2) and 0.6.1.5, with UE4SS v3.0.1 Beta (Unreal Engine 5.4).
-- On 0.7 the HUD also shows the new energy stat as a bar and the heart as an injury region. Exhaustion, fear and factions are not shown yet; `docs/hud-upgrades-0.7.md` has the plan for them.
+- On 0.7 the HUD also shows the new energy stat as a bar and the heart as an injury region. The exhaustion and fear numbers are shown as the game stores them, because their scale is not known yet.
+- With no fight going on the HUD refreshes about 10 times a second instead of 30.
 - Weight is the physics mass of the body and height is measured from the head to the feet, so both are close estimates.
-- Damage dealt counts health lost by enemies, so it assumes enemies don't hurt each other. In 0.7 factions can fight each other, so the total can include damage you didn't deal.
+- The game does not say who hit whom. Damage dealt counts health lost by enemies within 5 m of you, or by the enemy you tagged at any distance, because in 0.7 factions also fight each other. A kill counts if you damaged that enemy before. Hits with thrown or shot weapons on untagged enemies further away are not counted.
+- The bleed-out estimate and the "bleeding heavily" threshold are estimates and have not been tuned in play.
 - The game doesn't expose its own maximum for strength and skill progress; the bars treat 100% as the cap.
 - If the in-game HUD doesn't show, right-click `ue4ss\Mods\Fechtbuch\overlay.ps1` → *Run with PowerShell* for a separate stats window (run the game in borderless/windowed mode).
 

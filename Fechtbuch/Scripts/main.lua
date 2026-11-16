@@ -5,6 +5,8 @@
 --     enemy gets a stats card (incl. weight, height, strength), a tag over their head and
 --     floating damage numbers. Press Z on them again to untag. Unfocused enemies show nothing.
 --   * Your panel also shows weight/height and strength + skill progress bars.
+--   * Threat list: the three nearest living enemies with distance, health and side (left/right/behind).
+--   * After a fight a short recap shows time, damage, hits and kills.
 --   * Home opens the Fechtbuch menu: choose what shows, where panels go and how big they are.
 --     Settings are saved to settings.txt next to this mod.
 --
@@ -12,13 +14,17 @@
 
 local UEHelpers = require("UEHelpers")
 
-local VERSION      = "1.2.1"
+local VERSION      = "1.3.0"
 
 local TICK_MS      = 33     -- HUD refresh (~30 fps)
 local SCAN_EVERY   = 300    -- look for new fighter classes every N ticks (~10 s)
 local HIT_MIN      = 0.5    -- smallest health drop counted as a hit
 local HIT_MERGE    = 6      -- drops within this many ticks count as one blow
 local FOCUS_RANGE  = 20     -- meters
+local THREAT_RANGE = 30     -- meters: threat list and fight tracking
+local CREDIT_RANGE = 5      -- meters: an enemy's health loss counts as your hit inside this reach
+local BLEED_HEAVY  = 10     -- bleeding above this triggers the warning (a guess; tune it in play)
+local IDLE_SKIP    = 3      -- with no fight going on, refresh every Nth tick (~10 fps)
 
 ---------------------------------------------------------------------------
 -- Property names (Early Access Willie_BP, checked on 0.6.1.5 and 0.7; matched ignoring
@@ -29,6 +35,8 @@ local STATS = {
     cons      = { "Consciousness" },
     stamina   = { "Stamina" },
     energy    = { "SMH Energy" },                              -- 0.7 energy system, 0..1
+    exhaust   = { "Exhaustion" },                              -- 0.7; scale not known yet, shown raw
+    fear      = { "Fear" },                                    -- 0.7; scale not known yet, shown raw
     pain      = { "Pain" },
     bleed     = { "Bleeding" },
     dead      = { "DED" },
@@ -164,14 +172,37 @@ local function PanelItems(prefix, pos, scale)
     }
 end
 
+-- Layout presets: a preset only flips the show/hide switches below; positions and sizes stay yours
+local PRESET_NAMES = { "Custom", "Full", "Compact", "Duel" }
+local function PresetTable(detail, enemyCard, threats)
+    local t = {}
+    for _, k in ipairs({ "health", "cons", "stamina", "energy", "pain", "bleed" }) do t["you." .. k] = true; t["enemy." .. k] = true end
+    for _, k in ipairs({ "body", "injuries", "damage", "physique" }) do
+        t["you." .. k] = detail
+        t["enemy." .. k] = detail or (enemyCard and (k == "body" or k == "injuries"))
+    end
+    t["you.show"], t["you.progress"], t["you.hit"], t["you.warn"] = true, detail, true, true
+    t["enemy.show"], t["enemy.tag"], t["enemy.numbers"] = enemyCard, true, true
+    t["threat.show"] = threats
+    return t
+end
+local PRESETS = {
+    Full    = PresetTable(true, true, true),      -- everything
+    Compact = PresetTable(false, false, false),   -- your bars only
+    Duel    = PresetTable(false, true, false),    -- your bars + the enemy card
+}
+
 local MENU = { { header = "GENERAL" },
     { key = "hud",       label = "Fechtbuch HUD (F7)", type = "bool", default = true },
     { key = "bgOpacity", label = "Panel background",    type = "num",  min = 0, max = 0.9, step = 0.05, default = 0.45, pct = true },
+    { key = "preset",    label = "Layout preset",       type = "choice", choices = PRESET_NAMES, default = "Custom" },
+    { key = "recap",     label = "Fight recap",         type = "bool", default = true },
     { header = "YOUR PANEL" },
 }
 for _, it in ipairs(PanelItems("you", "Bottom Left", 0.75)) do table.insert(MENU, it) end
 table.insert(MENU, { key = "you.progress", label = "Strength & skill progress", type = "bool", default = true })
 table.insert(MENU, { key = "you.hit", label = "Damage taken pop-up", type = "bool", default = true })
+table.insert(MENU, { key = "you.warn", label = "Low-state warning", type = "bool", default = true })
 table.insert(MENU, { header = "FOCUSED ENEMY" })
 table.insert(MENU, { key = "enemy.focusMode", label = "Focus with", type = "choice", choices = FOCUS_MODES, default = "Z tag only" })
 for _, it in ipairs(PanelItems("enemy", "Top Right", 0.65)) do
@@ -181,6 +212,12 @@ end
 table.insert(MENU, { key = "enemy.tag",      label = "Tag over their head", type = "bool", default = true })
 table.insert(MENU, { key = "enemy.tagScale", label = "Tag size",            type = "num",  min = 0.5, max = 2, step = 0.1, default = 1, pct = true })
 table.insert(MENU, { key = "enemy.numbers",  label = "Damage numbers",      type = "bool", default = true })
+table.insert(MENU, { header = "THREAT LIST" })
+table.insert(MENU, { key = "threat.show",  label = "Show nearest enemies", type = "bool",   default = true })
+table.insert(MENU, { key = "threat.pos",   label = "Position",             type = "choice", choices = POSITIONS, default = "Middle Right" })
+table.insert(MENU, { key = "threat.scale", label = "Size",                 type = "num",    min = 0.4, max = 1.6, step = 0.05, default = 0.75, pct = true })
+table.insert(MENU, { key = "threat.offX",  label = "Nudge left/right",     type = "num",    min = -1500, max = 1500, step = 10, default = 0 })
+table.insert(MENU, { key = "threat.offY",  label = "Nudge up/down",        type = "num",    min = -1000, max = 1000, step = 10, default = 0 })
 table.insert(MENU, { header = "" })
 table.insert(MENU, { key = "reset", label = "Reset everything to defaults", type = "action" })
 table.insert(MENU, { key = "close", label = "Close menu (Home)",             type = "action" })
@@ -193,6 +230,11 @@ local function Defaults()
 end
 
 local SETTINGS_FILE = MOD_DIR .. "\\settings.txt"
+
+local function ApplyPreset(name)
+    local preset = PRESETS[name]
+    if preset then for k, v in pairs(preset) do S[k] = v end end
+end
 
 local function LoadSettings()
     S = Defaults()
@@ -295,7 +337,8 @@ local function ResolveClass(obj)
         end
         return nil
     end
-    local r = { stats = {}, parts = {}, broken = {}, disloc = {}, lockAt = have[Norm("Lock Camera At")], gear = {} }
+    local r = { stats = {}, parts = {}, broken = {}, disloc = {}, lockAt = have[Norm("Lock Camera At")], gear = {},
+                kind = cname:find("Zombie") and "REVENANT" or "ENEMY" }
     for _, g in ipairs(GEAR) do if have[Norm(g)] then table.insert(r.gear, have[Norm(g)]) end end
     for k, list in pairs(STATS) do r.stats[k] = pick(list) end
     for k, list in pairs(PARTS) do r.parts[k] = pick(list) end
@@ -343,7 +386,7 @@ local tickNo = 0
 local function NewState()
     return { max = {}, prev = {}, taken = 0, hits = 0, lastHit = 0, maxHit = 0,
              curHit = 0, curHitTick = -100, newHit = false, dead = false, seen = 0,
-             dealtTo = 0, flash = {}, segPrev = {} }
+             dealtTo = 0, flash = {}, segPrev = {}, trend = {}, trendRef = {} }
 end
 
 local function Pct(v, mx)
@@ -375,6 +418,24 @@ local function ReadDetails(c)
 
     -- weight: physics mass of the whole body; gear: armor + weapons; height: head bone to feet
     if tickNo - (st.physTick or -1000) >= 30 then
+        -- loss rates (bleed-out estimate) and wound trends; forget them after a gap in tracking
+        local now = os.clock()
+        if tickNo - (st.physTick or -1000) > 120 then
+            st.trend, st.trendRef, st.rateT, st.hpRate, st.consRate = {}, {}, nil, nil, nil
+        end
+        if st.rateT and now - st.rateT > 0.2 then
+            local dt = now - st.rateT
+            if type(c.hp) == "number" and type(st.rateHp) == "number" then st.hpRate = ((st.hpRate or 0) + (st.rateHp - c.hp) / dt) / 2 end
+            if type(c.cons) == "number" and type(st.rateCons) == "number" then st.consRate = ((st.consRate or 0) + (st.rateCons - c.cons) / dt) / 2 end
+        end
+        st.rateT, st.rateHp, st.rateCons = now, c.hp, c.cons
+        st.trendN = (st.trendN or 0) + 1
+        if st.trendN % 3 == 0 then   -- change in each limb over the last ~3 passes
+            for k, v in pairs(c.part) do
+                st.trend[k] = st.trendRef[k] and (v - st.trendRef[k]) or 0
+                st.trendRef[k] = v
+            end
+        end
         st.physTick = tickNo
         -- GetMass walks every physics body; doing it on a fighter being torn down crashed the game,
         -- so read it once, from a fighter that has been alive for a while
@@ -477,6 +538,9 @@ local function Injuries(c)
             table.insert(tags, string.format("%s %d%%", lbl, math.floor(pct + 0.5)))
             sev = math.max(sev, lsev)
         end
+        local tr = c.st.trend[k]
+        if #tags > 0 and tr and tr > 0.2 then table.insert(tags, "healing")
+        elseif #tags > 0 and tr and tr < -0.2 then table.insert(tags, "worse") end
         if #tags > 0 then table.insert(list, { text = name .. ": " .. table.concat(tags, ", "), sev = sev, rank = rank }) end
     end
     table.sort(list, function(a, b) return a.rank < b.rank end)
@@ -754,7 +818,7 @@ local function BuildStatsPanel(tree, canvas, prefix, isYou)
     local injLine = fs(11) + 5 * s
     local dmgLine = fs(10) + 5 * s
     local colH = #bars * gap + nInj * injLine + (showDmg and (2 * dmgLine + 6 * s) or 0)
-        + (showPhys and (2 * dmgLine + 8 * s) or 0) + (showProg and (3 * gap + 10 * s) or 0)
+        + (showPhys and (3 * dmgLine + 8 * s) or 0) + (showProg and (3 * gap + 10 * s) or 0)
     local hasCol = colH > 0
     local contentH = math.max(showBody and bodyH or 0, colH)
     local w = hasCol and (colX + barW + pad) or (pad * 2 + (showBody and bodyW or 160 * s))
@@ -790,7 +854,8 @@ local function BuildStatsPanel(tree, canvas, prefix, isYou)
     if showPhys then
         p.phys1 = Label(tree, p.w, colX, iy + 8 * s, fs(10), COLORS.gold)
         p.phys2 = Label(tree, p.w, colX, iy + 8 * s + dmgLine, fs(10), COLORS.gold)
-        iy = iy + 8 * s + 2 * dmgLine
+        p.phys3 = Label(tree, p.w, colX, iy + 8 * s + 2 * dmgLine, fs(10), COLORS.dim)
+        iy = iy + 8 * s + 3 * dmgLine
     end
     if showProg then
         local py = iy + 10 * s + barLabel
@@ -801,6 +866,16 @@ local function BuildStatsPanel(tree, canvas, prefix, isYou)
         }
     end
     return p
+end
+
+-- Seconds until health or consciousness runs out at the current loss rate, while bleeding
+local function BleedEta(c)
+    if c.isDead or type(c.bleed) ~= "number" or c.bleed <= 0.5 then return nil end
+    local st, t = c.st, math.huge
+    if st.hpRate and st.hpRate > 0.05 and type(c.hp) == "number" then t = math.min(t, c.hp / st.hpRate) end
+    if st.consRate and st.consRate > 0.05 and type(c.cons) == "number" then t = math.min(t, c.cons / st.consRate) end
+    if t < 180 then return math.floor(t + 0.5) end
+    return nil
 end
 
 local function UpdateStatsPanel(p, c, title, dmg1, dmg2)
@@ -815,7 +890,9 @@ local function UpdateStatsPanel(p, c, title, dmg1, dmg2)
     UpdateBar(b.pain,    type(c.pain) == "number" and c.pain / 100 or 0, Fmt(c.pain, 1))
     -- Bleeding keeps climbing on corpses, so cap the readout and hide it once dead
     local bleed = (type(c.bleed) == "number" and not c.isDead) and c.bleed or nil
-    UpdateBar(b.bleed, bleed and bleed / 100 or 0, bleed and (bleed > 999 and "999+" or Fmt(bleed, 1)) or "-")
+    local eta = BleedEta(c)
+    UpdateBar(b.bleed, bleed and bleed / 100 or 0,
+        bleed and ((bleed > 999 and "999+" or Fmt(bleed, 1)) .. (eta and string.format("   out in ~%d s", eta) or "")) or "-")
     if p.inj and (p.injSt ~= c.st or tickNo - (p.injTick or -100) >= 6) then
         p.injSt, p.injTick = c.st, tickNo
         UpdateInjuryList(p.inj, Injuries(c))
@@ -828,6 +905,7 @@ local function UpdateStatsPanel(p, c, title, dmg1, dmg2)
             st.heightCm and string.format("~%.0f cm", st.heightCm) or "-"))
         p.phys2:SetText(string.format("STRENGTH %s     GEAR %s", Fmt(c.muscle, 0),
             st.gearKg and string.format("%.1f kg", st.gearKg) or "-"))
+        p.phys3:SetText(string.format("EXHAUSTION %s     FEAR %s", Fmt(c.exhaust, 2), Fmt(c.fear, 2)))
     end
     if p.prog then
         local function pct(v) return type(v) == "number" and string.format("%.1f%%", v * 100) or "-" end
@@ -945,6 +1023,24 @@ local function BuildHud()
         h.tag = t
     end
 
+    if S["threat.show"] then
+        local ts = S["threat.scale"]
+        local a = POS_ANCHOR[S["threat.pos"]] or { 1, 0.5 }
+        local size = math.max(7, math.floor(11 * ts + 0.5))
+        local line = size + 6 * ts
+        local w, th = 250 * ts, 20 * ts + line * 4
+        local x = (a[1] == 0 and 24 or a[1] == 1 and -24 or 0) + S["threat.offX"]
+        local y = (a[2] == 0 and 24 or a[2] == 1 and -24 or 0) + S["threat.offY"]
+        local t = Panel(tree, canvas, x, y, w, th, a, a)
+        Rect(tree, t.w, 0, 0, w, th, { R = 0.02, G = 0.02, B = 0.02, A = S.bgOpacity }, 8 * ts)
+        local title = Label(tree, t.w, 12 * ts, 10 * ts, size, COLORS.dim)
+        title:SetText("THREATS")
+        t.rows = {}
+        for i = 1, 3 do t.rows[i] = Label(tree, t.w, 12 * ts, 10 * ts + i * line, size, COLORS.text) end
+        SetVis(t, false)
+        h.threat = t
+    end
+
     h.pops = {}
     if S["enemy.numbers"] then
         for i = 1, 8 do
@@ -957,6 +1053,8 @@ local function BuildHud()
 
     h.toast = Label(tree, canvas, 0, 110, 18, COLORS.gold, { 0.5, 0 }, { 0.5, 0 })
     SetOpacity(h.toast, 0)
+    h.recap = Label(tree, canvas, 0, 150, 16, COLORS.text, { 0.5, 0 }, { 0.5, 0 })
+    SetOpacity(h.recap, 0)
 
     h.menu = BuildMenu(tree, canvas)
     SetVis(h.menu, menuOpen)
@@ -1108,8 +1206,10 @@ local function SpawnPop(x, y, amount, color)
 end
 
 local function UpdatePops()
+    local active = false
     for _, p in ipairs(hud.pops) do
         if p.life > 0 then
+            active = true
             p.life = p.life - 0.03
             p.y = p.y - 1.2
             SetPos(p, p.x, p.y)
@@ -1117,6 +1217,7 @@ local function UpdatePops()
             if p.life <= 0 then SetVis(p, false) end
         end
     end
+    return active
 end
 
 ---------------------------------------------------------------------------
@@ -1133,7 +1234,7 @@ local function Summary(c, title)
 end
 
 local function HideCombat()
-    SetVis(hud.you, false); SetVis(hud.enemy, false); SetVis(hud.tag, false)
+    SetVis(hud.you, false); SetVis(hud.enemy, false); SetVis(hud.tag, false); SetVis(hud.threat, false)
 end
 
 -- Level loads and respawns tear fighters down; touching them then crashes the game
@@ -1143,16 +1244,24 @@ local lastWorld, lastPawn = nil, nil
 -- Assigned at the bottom of the file; Tick runs them on the game thread
 local ProcessKeys, DumpProps
 local dumpPending = true   -- one automatic property dump per game session
+local fight = nil          -- the fight in progress: counters at its start, for the recap
+local recap = { text = "", life = 0 }
+local idle = false         -- nothing to animate and no enemy around: Tick skips frames
+local frameNo = 0
 
 local function ResetWorldState(ticks)
     states = {}
     taggedAddr = nil
+    fight = nil
     cooldown = math.max(cooldown, ticks)
 end
 
 local function Tick()
+    frameNo = frameNo + 1
+    local pressed = ProcessKeys and ProcessKeys()
+    if idle and not pressed and not menuOpen and not hudDirty and cooldown == 0 and frameNo % IDLE_SKIP ~= 0 then return end
+    idle = false
     tickNo = tickNo + 1
-    if ProcessKeys then ProcessKeys() end
 
     local world = nil
     pcall(function() world = UEHelpers.GetWorld() end)
@@ -1197,6 +1306,7 @@ local function Tick()
     if not (me and type(me.hp) == "number") or not S.hud then
         HideCombat()
         if not (me and type(me.hp) == "number") then fileText = "Fechtbuch: waiting for your fighter..." end
+        idle = true
         return
     end
 
@@ -1206,6 +1316,7 @@ local function Tick()
     local myLoc = ActorLocation(player)
     local myAddr = Addr(player)
     local enemies = {}
+    local living = 0   -- living enemies within THREAT_RANGE
     for _, o in ipairs(fighters) do
         if Addr(o) ~= myAddr then
             local c = ReadCharacter(o)
@@ -1213,14 +1324,18 @@ local function Tick()
                 c.loc = ActorLocation(o) or HeadLocation(o)
                 c.dist = Dist(c.loc, myLoc)
                 c.enemy = (c.team == nil or me.team == nil or c.team ~= me.team)
-                if c.enemy and c.drop > 0 then
-                    -- enemies don't fight each other, so their health loss is credited to you
+                -- Since 0.7 factions fight each other, so an enemy's health loss is credited to you
+                -- only within your reach, or on the enemy you tagged
+                if c.enemy and c.drop > 0 and (c.dist <= CREDIT_RANGE or Addr(o) == taggedAddr) then
                     session.dealt = session.dealt + c.drop
                     c.st.dealtTo = c.st.dealtTo + c.drop
                     if c.st.newHit then session.dealtHits = session.dealtHits + 1 end
                     if c.st.curHit > session.maxDealt then session.maxDealt = c.st.curHit end
+                    if fight and c.st.curHit > fight.best then fight.best = c.st.curHit end
                 end
-                if c.enemy and c.isDead and not c.st.dead then session.kills = session.kills + 1 end
+                -- a kill is yours if you hurt them at some point
+                if c.enemy and c.isDead and not c.st.dead and c.st.dealtTo > 0 then session.kills = session.kills + 1 end
+                if c.enemy and not c.isDead and c.dist <= THREAT_RANGE then living = living + 1 end
                 c.st.dead = c.isDead
                 if c.enemy then table.insert(enemies, c) end
             end
@@ -1245,12 +1360,45 @@ local function Tick()
         SetOpacity(hud.toast, math.min(1, toast.life * 3))
     end
 
+    -- A fight runs from the first living enemy nearby until you fall or nobody is left for ~3 s
+    if not fight and living > 0 and not me.isDead then
+        fight = { t = os.time(), dealt = session.dealt, taken = me.st.taken, hits = session.dealtHits,
+                  kills = session.kills, best = 0, quiet = 0 }
+    end
+    if fight then
+        fight.quiet = living == 0 and fight.quiet + 1 or 0
+        if me.isDead or fight.quiet > 90 then
+            local secs = math.max(0, os.time() - fight.t - (me.isDead and 0 or 3))
+            local dealt, taken = math.max(0, session.dealt - fight.dealt), math.max(0, me.st.taken - fight.taken)
+            if S.recap and (dealt > 0 or taken > 0) then
+                recap.text = string.format("%s   %d:%02d\nDEALT %s   TAKEN %s   HITS %d   BEST HIT %s   KILLS %d",
+                    me.isDead and "YOU FELL" or "FIGHT OVER", math.floor(secs / 60), secs % 60, Fmt(dealt, 0), Fmt(taken, 0),
+                    math.max(0, session.dealtHits - fight.hits), Fmt(fight.best, 0), math.max(0, session.kills - fight.kills))
+                recap.life = 1
+            end
+            fight = nil
+        end
+    end
+    if recap.life > 0 then
+        hud.recap:SetText(recap.text)
+        recap.life = recap.life - 0.005
+        SetOpacity(hud.recap, math.max(0, math.min(1, recap.life * 4)))
+    end
+
     -- your panel
     if hud.you then
         SetVis(hud.you, true)
-        UpdateStatsPanel(hud.you, me, "YOU",
+        local warn = nil
+        if S["you.warn"] and not me.isDead then
+            local consPct = Pct(me.cons, me.st.max.cons)
+            if consPct and consPct < 25 then warn = "LOSING CONSCIOUSNESS"
+            elseif type(me.bleed) == "number" and me.bleed > BLEED_HEAVY then warn = "BLEEDING HEAVILY"
+            elseif type(me.energy) == "number" and me.energy < 0.15 then warn = "OUT OF ENERGY" end
+        end
+        UpdateStatsPanel(hud.you, me, warn and ("YOU - " .. warn) or "YOU",
             string.format("DEALT %s     TAKEN %s", Fmt(session.dealt, 0), Fmt(me.st.taken, 0)),
             string.format("BEST HIT %s     KILLS %d", Fmt(session.maxDealt, 0), session.kills))
+        hud.you.title:SetColor(warn and LerpColor(COLORS.text, COLORS.hitBig, (math.sin(tickNo * 0.3) + 1) / 2) or COLORS.text)
         if hud.you.hit then
             if me.drop > 0 and S["you.hit"] then hud.you.hit:SetText("-" .. Fmt(me.st.curHit, 0)); hud.youHitLife = 1 end
             hud.youHitLife = math.max(0, (hud.youHitLife or 0) - 0.02)
@@ -1263,12 +1411,33 @@ local function Tick()
         if focus then
             SetVis(hud.enemy, true)
             UpdateStatsPanel(hud.enemy, focus,
-                string.format("%s%s  %.1f m", focus.tagged and "TAGGED " or "", focus.isDead and "ENEMY - DEAD" or "ENEMY", focus.dist),
+                string.format("%s%s  %.1f m", focus.tagged and "TAGGED " or "", focus.isDead and (focus.r.kind .. " - DEAD") or focus.r.kind, focus.dist),
                 string.format("YOU DEALT %s     HITS %d", Fmt(focus.st.dealtTo, 0), focus.st.hits),
                 string.format("BEST HIT %s", Fmt(focus.st.maxHit, 0)))
         else
             SetVis(hud.enemy, false)
         end
+    end
+
+    -- nearest living enemies; enemies is sorted living first, then by distance
+    if hud.threat then
+        local vw = ViewportSize(player)
+        local shown = 0
+        for _, c in ipairs(enemies) do
+            if shown >= 3 or c.isDead or c.dist > THREAT_RANGE then break end
+            shown = shown + 1
+            local dir = ""
+            if pc then
+                local x = ToScreenPx(pc, c.loc)
+                dir = (x == nil) and "BEHIND" or (x < 0) and "LEFT" or (x > vw) and "RIGHT" or ""
+            end
+            local row = hud.threat.rows[shown]
+            row:SetText(string.format("%s  %.0f m  %s%%  %s", c.r.kind, c.dist, Fmt(Pct(c.hp, c.st.max.hp), 0), dir))
+            row:SetColor(c.tagged and COLORS.gold or COLORS.text)
+            SetVis(row, true)
+        end
+        for i = shown + 1, 3 do SetVis(hud.threat.rows[i], false) end
+        SetVis(hud.threat, shown > 0)
     end
 
     local scale = ViewportScale(player)
@@ -1298,6 +1467,7 @@ local function Tick()
         end
     end
 
+    local popsActive = false
     if #hud.pops > 0 then
         if focus and focus.drop > 0 then
             local x, y = ToScreenPx(pc, focus.head)
@@ -1312,7 +1482,7 @@ local function Tick()
                 end
             end
         end
-        UpdatePops()
+        popsActive = UpdatePops()
     end
 
     if tickNo % 30 == 0 then
@@ -1328,6 +1498,9 @@ local function Tick()
     for a, st in pairs(states) do
         if tickNo - st.seen > 300 then states[a] = nil end
     end
+
+    idle = not fight and not popsActive and me.drop == 0 and (hud.youHitLife or 0) <= 0
+        and toast.life <= 0 and recap.life <= 0
 end
 
 local writtenText = nil
@@ -1434,6 +1607,7 @@ local function MenuChange(dir, enter)
         if it.key == "reset" then S = Defaults()
         elseif it.key == "close" then menuOpen = false; menuDirty = true; return end
     end
+    if it.key == "preset" then ApplyPreset(S.preset) elseif it.type ~= "action" then S.preset = "Custom" end
     Changed()
 end
 
@@ -1450,6 +1624,9 @@ local function Take(name)
 end
 
 ProcessKeys = function()
+    local any = false
+    for _, v in pairs(keys) do if v > 0 then any = true end end
+    if not any then return false end
     if Take("home") % 2 == 1 then menuOpen = not menuOpen; menuDirty = true end
     local up, down, left, right, enter = Take("up"), Take("down"), Take("left"), Take("right"), Take("enter")
     if menuOpen then
@@ -1467,6 +1644,7 @@ ProcessKeys = function()
         Log("counters reset")
     end
     if Take("f9") > 0 then dumpPending = true end
+    return true
 end
 
 Bind(Key.HOME, "home")

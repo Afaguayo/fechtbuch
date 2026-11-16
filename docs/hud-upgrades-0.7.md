@@ -1,6 +1,25 @@
 # HUD upgrades for Half Sword 0.7 (draft)
 
-Status: proposal, nothing here is built yet. Written 2026-11-15 against Half Sword 0.7.0.2.
+Status: all ten upgrades are built in version 1.3.0 (2026-11-15), except faction colors. Checked against a mock of the game; 1.3.0 has not been played yet. The rest of this note is the original proposal, kept for the reasoning.
+
+## What 1.3.0 built
+
+| # | Upgrade | How it was built |
+|---|---|---|
+| 1 | Energy bar | `SMH Energy`, 0 to 1 (in 1.2.1) |
+| 2 | Wound trend | "healing" or "worse" after an injury, from the change in limb health over about 3 seconds |
+| 3 | Bleed-out estimate | "out in ~N s" on the bleeding bar, from the loss rate of health and consciousness, shown when under 3 minutes |
+| 4 | Enemy type | "REVENANT" for `Willie_BP_Zombie_C`, "ENEMY" otherwise |
+| 5 | Threat list | Three nearest living enemies within 30 m, with LEFT, RIGHT or BEHIND |
+| 6 | Fair damage credit | Health loss counts within 5 m of you or on the tagged enemy; a kill counts if you damaged them. Faction colors are not built: the dump has no per-fighter faction id |
+| 7 | Layout presets | Full, Compact, Duel in the menu |
+| 8 | Low-state warning | Title of your panel pulses and names the problem: consciousness under 25%, bleeding over 10, energy under 15% |
+| 9 | Fight recap | One card when the fight ends or you fall |
+| 10 | Slower refresh out of combat | Every third tick when no fight is going on |
+
+Also added: raw `Exhaustion` and `Fear` values on the physique lines, to learn their scale.
+
+To tune in play: the bleeding threshold (10), the 5 m credit reach, and whether the `Muscle Growth Due` readout is on the same scale as the old one.
 
 ## Update after the first 0.7 fight (2026-11-15)
 
