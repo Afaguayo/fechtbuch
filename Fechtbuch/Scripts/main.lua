@@ -15,7 +15,7 @@
 
 local UEHelpers = require("UEHelpers")
 
-local VERSION      = "1.5.0"
+local VERSION      = "1.5.1"
 
 local TICK_MS      = 33     -- HUD refresh (~30 fps)
 local SCAN_EVERY   = 300    -- look for new fighter classes every N ticks (~10 s)
@@ -578,8 +578,64 @@ local function NearestBone(obj, loc)
     return best
 end
 
--- Source 1: the blood emitters the game attaches to a wound. They move with the body, so their
--- position is always current. Returns true when this source is in use for the fighter.
+-- health region -> the shapes a cut on it can be drawn on
+local PART_SEGS = {
+    head = { "head" }, neck = { "neck" }, upper = { "chest" }, heart = { "chest" }, back = { "chest", "abdomen" },
+    lower = { "abdomen", "pelvis" }, armR = { "uArmR", "fArmR" }, armL = { "uArmL", "fArmL" },
+    legR = { "thighR", "shinR" }, legL = { "thighL", "shinL" },
+}
+
+-- A cut on the body part that lost the most health in the last two seconds: the right limb,
+-- at a spread-out spot. Used when the game gives no usable position.
+local function PartWound(c)
+    local st = c.st
+    local lw = st.lastWorst
+    if not lw or tickNo - lw.tick > 60 then return nil end
+    local segs = PART_SEGS[lw.part]
+    if not segs then return nil end
+    return { seg = segs[st.woundN % #segs + 1], bone = "part:" .. lw.part, born = tickNo, mode = "part",
+             fx = 0.3 + ((st.woundN * 37) % 41) / 100, fy = 0.2 + ((st.woundN * 53) % 61) / 100 }
+end
+
+-- Add a cut unless it repeats one that is already drawn at that spot
+local function KeepWound(st, wd)
+    if not wd then return end
+    for _, o in ipairs(st.wounds) do
+        if o.seg == wd.seg then
+            if wd.mode == "part" then
+                if tickNo - o.born < 90 then return end
+            elseif math.abs(o.fx - wd.fx) < 0.12 and math.abs(o.fy - wd.fy) < 0.12 then
+                return
+            end
+        end
+    end
+    wd.idx = st.woundN
+    table.insert(st.wounds, wd)
+    while #st.wounds > WOUND_MAX do table.remove(st.wounds, 1) end
+end
+
+-- The objects in an array property, whichever way this UE4SS build hands them out
+local function ArrayObjects(arr, count)
+    local objs = {}
+    pcall(function()
+        arr:ForEach(function(index, elem)
+            local o = elem
+            pcall(function() o = elem:get() end)
+            objs[index] = o
+        end)
+    end)
+    if objs[0] ~= nil then   -- zero-based
+        for i = count, 1, -1 do objs[i] = objs[i - 1] end
+    end
+    for i = 1, count do
+        if objs[i] == nil then pcall(function() objs[i] = arr[i] end) end
+    end
+    return objs
+end
+
+-- Source 1: the blood emitters the game attaches when a fighter is cut. They are short-lived
+-- (seen in play: 1 to 4 at a time, gone within seconds), so a new emitter means "a cut just
+-- happened" and its mark stays after the emitter is gone. Returns true when this source is in use.
 local function ReadEmitters(c)
     local obj, st, w = c.obj, c.st, c.r.w
     if not w.emitters then return false end
@@ -587,32 +643,25 @@ local function ReadEmitters(c)
     pcall(function() arr = obj[w.emitters] end)
     local count = arr and ArrLen(arr) or nil
     if not count then return false end
-    if count == 0 then
-        if st.woundSrc == "emitter" then st.wounds, st.woundN = {}, 0 end   -- every wound closed
-        return st.woundSrc == "emitter"
-    end
-    if st.woundSrc == "emitter" and count == st.woundN then return true end
-    local known = {}
-    if st.woundSrc == "emitter" then for _, o in ipairs(st.wounds) do known[o.idx] = o end end
-    local list = {}
-    for i = math.max(1, count - WOUND_MAX + 1), count do
-        local comp, loc, sock = nil, nil, nil
-        pcall(function() comp = arr[i] end)
-        pcall(function() comp = comp:get() end)
-        if comp and Valid(comp) then
+    st.woundSrc = "emitter"
+    local had = st.emitN or 0
+    st.emitN = count
+    if count <= had then return true end
+    local objs = ArrayObjects(arr, count)
+    for i = had + 1, count do
+        local comp, loc, sock = objs[i], nil, nil
+        local ok = comp ~= nil and Valid(comp)
+        if ok then
             pcall(function() loc = Vec(comp:K2_GetComponentLocation()) end)
             pcall(function() sock = NameStr(comp:GetAttachSocketName()) end)
         end
         local bone = (sock and BoneSeg(sock)) and sock or (loc and NearestBone(obj, loc)) or nil
-        local wd = PlaceWound(obj, bone, loc, i)
-        if not known[i] then LogWound(c, "emitter socket=" .. tostring(sock), i, bone, loc, wd) end
-        if wd then
-            wd.idx = i
-            if known[i] and known[i].seg == wd.seg then wd.born = known[i].born end   -- an old cut does not flash again
-            table.insert(list, wd)
-        end
+        st.woundN = st.woundN + 1
+        local wd = PlaceWound(obj, bone, loc, st.woundN) or PartWound(c)
+        LogWound(c, string.format("emitter(%s) socket=%s", ok and "ok" or ("unreadable " .. type(comp)), tostring(sock)),
+            st.woundN, wd and wd.bone or bone, loc, wd)
+        KeepWound(st, wd)
     end
-    st.wounds, st.woundN, st.woundSrc = list, count, "emitter"
     return true
 end
 
@@ -648,44 +697,38 @@ local function ReadBloodArrays(c)
     return true
 end
 
--- health region -> the shapes a cut on it can be drawn on
-local PART_SEGS = {
-    head = { "head" }, neck = { "neck" }, upper = { "chest" }, heart = { "chest" }, back = { "chest", "abdomen" },
-    lower = { "abdomen", "pelvis" }, armR = { "uArmR", "fArmR" }, armL = { "uArmL", "fArmL" },
-    legR = { "thighR", "shinR" }, legL = { "thighL", "shinL" },
-}
-
 local function ReadWounds(c)
     local obj, st, w = c.obj, c.st, c.r.w
     st.woundRead = true
-    if ReadEmitters(c) or ReadBloodArrays(c) then return end
-    -- Source 3: neither holds anything. When a hit makes the bleeding rise, mark the last damaged
-    -- bone; if the game names none, mark the body part that lost the most health in that hit.
-    local bleed = type(c.bleed) == "number" and c.bleed or 0
-    local worst, worstDrop = nil, 0.5
+    -- which body part is losing health: the fallback spot for a cut without a usable position
     st.woundPart = st.woundPart or {}
+    local worst, worstDrop = nil, 0.5
     for k, v in pairs(c.part) do
         local lost = (st.woundPart[k] or v) - v
         if lost > worstDrop then worst, worstDrop = k, lost end
         st.woundPart[k] = v
     end
+    if worst then st.lastWorst = { part = worst, tick = tickNo } end
+    -- a cut on a body part that is whole again has healed
+    for i = #st.wounds, 1, -1 do
+        local wd = st.wounds[i]
+        local seg = SEG_BY_ID[wd.seg]
+        local pct = seg and c.part[seg.parts[1]]
+        if pct and pct >= 97 and tickNo - wd.born > 300 then table.remove(st.wounds, i) end
+    end
+
+    if ReadEmitters(c) or ReadBloodArrays(c) then return end
+    -- Source 3: no emitters and no arrays in this game version. A hit that makes the bleeding rise
+    -- is a cut: on the last damaged bone if the game names one, else on the worst-hit body part.
+    local bleed = type(c.bleed) == "number" and c.bleed or 0
     if c.drop > 0 and bleed > (st.woundBleed or 0) + 0.05 then
         local bone, loc = nil, nil
         if w.lastBone then pcall(function() bone = NameStr(obj[w.lastBone]) end) end
         if w.hitPoint then pcall(function() loc = Vec(obj[w.hitPoint]) end) end
         st.woundN = st.woundN + 1
-        local wd = bone and PlaceWound(obj, bone, loc, st.woundN) or nil
-        if not wd and worst then
-            local segs = PART_SEGS[worst]
-            wd = { seg = segs[st.woundN % #segs + 1], bone = "part:" .. worst, born = tickNo, mode = "part",
-                   fx = 0.3 + ((st.woundN * 37) % 41) / 100, fy = 0.2 + ((st.woundN * 53) % 61) / 100 }
-        end
+        local wd = (bone and PlaceWound(obj, bone, loc, st.woundN)) or PartWound(c)
         LogWound(c, "hit", st.woundN, wd and wd.bone or bone, loc, wd)
-        if wd then
-            wd.idx = st.woundN
-            table.insert(st.wounds, wd)
-            while #st.wounds > WOUND_MAX do table.remove(st.wounds, 1) end
-        end
+        KeepWound(st, wd)
         st.woundSrc = "hit"
     end
     st.woundBleed = bleed
@@ -1664,10 +1707,13 @@ local lastWorld, lastPawn = nil, nil
 -- level also has a fighter standing in it, so "is there a fighter" is not enough to tell.
 local worldName = ""
 local menuSeen = nil
+local cursorSince = nil
 local function InGameMenu()
     local shown = false
     pcall(function() shown = UEHelpers.GetPlayerController().bShowMouseCursor == true end)
-    local menu = shown or worldName:lower():find("menu") ~= nil
+    -- in play the cursor shows for about a second every so often; only a cursor that stays is a menu
+    if shown then cursorSince = cursorSince or os.clock() else cursorSince = nil end
+    local menu = (cursorSince ~= nil and os.clock() - cursorSince >= 0.8) or worldName:lower():find("menu") ~= nil
     if menuSeen ~= menu then
         menuSeen = menu
         Log("%s (cursor %s, level %s)", menu and "menu: HUD hidden" or "play: HUD shown", shown and "shown" or "hidden", worldName)
