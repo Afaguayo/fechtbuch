@@ -12,6 +12,8 @@
 
 local UEHelpers = require("UEHelpers")
 
+local VERSION      = "1.2.0"
+
 local TICK_MS      = 33     -- HUD refresh (~30 fps)
 local SCAN_EVERY   = 300    -- look for new fighter classes every N ticks (~10 s)
 local HIT_MIN      = 0.5    -- smallest health drop counted as a hit
@@ -19,7 +21,8 @@ local HIT_MERGE    = 6      -- drops within this many ticks count as one blow
 local FOCUS_RANGE  = 20     -- meters
 
 ---------------------------------------------------------------------------
--- Property names (Early Access Willie_BP; matched ignoring case/spaces/underscores)
+-- Property names (Early Access Willie_BP, checked on 0.6.1.5 and 0.7; matched ignoring
+-- case/spaces/underscores). A name the game no longer has reads as nil and its readout shows "-".
 ---------------------------------------------------------------------------
 local STATS = {
     hp        = { "Health" },
@@ -301,6 +304,19 @@ local function ResolveClass(obj)
         for k in pairs(BROKEN) do if not r.broken[k] then table.insert(missing, "broken:" .. k) end end
         for k in pairs(DISLOCATED) do if not r.disloc[k] then table.insert(missing, "disloc:" .. k) end end
         Log("class %s resolved; missing: %s", cname, #missing > 0 and table.concat(missing, ", ") or "none")
+        -- Game updates rename and add stats (0.7: energy, healing wounds, factions). List the
+        -- candidates so the log alone is enough to extend the tables above.
+        local used, extra = {}, {}
+        for _, t in ipairs({ r.stats, r.parts, r.broken, r.disloc }) do for _, pn in pairs(t) do used[pn] = true end end
+        for _, pn in pairs(have) do
+            local l = pn:lower()
+            if not used[pn] and #extra < 60 and (l:find("energy") or l:find("stamina") or l:find("muscle") or l:find("skill")
+                or l:find("wound") or l:find("heal") or l:find("faction") or l:find("lock")) then
+                table.insert(extra, pn)
+            end
+        end
+        table.sort(extra)
+        if #extra > 0 then Log("class %s unmapped: %s", cname, table.concat(extra, " | ")) end
     end
     return r
 end
@@ -330,17 +346,15 @@ local function Pct(v, mx)
     return math.max(0, math.min(100, v / mx * 100))
 end
 
-local function ReadCharacter(obj)
-    local a = Addr(obj)
-    local st = states[a]
-    if not st then st = NewState(); states[a] = st end
-    st.seen = tickNo
-    local r = ResolveClass(obj)
-
-    local c = { obj = obj, st = st, part = {}, broken = {}, disloc = {} }
-    for k, name in pairs(r.stats) do c[k] = Read(obj, name) end
+-- Everything only the panels show. Read for you and the focused enemy, not for the whole arena:
+-- it is ~40 property reads plus bone lookups per fighter.
+local function ReadDetails(c)
+    if c.full then return c end
+    c.full = true
+    local obj, st, r = c.obj, c.st, c.r
+    for k, name in pairs(r.stats) do if c[k] == nil then c[k] = Read(obj, name) end end
     -- the game uses a 0-100 scale; start there so a fighter first seen hurt still reads correctly
-    for _, k in ipairs({ "hp", "cons", "stamina" }) do
+    for _, k in ipairs({ "cons", "stamina" }) do
         if type(c[k]) == "number" and (st.max[k] == nil or c[k] > st.max[k]) then st.max[k] = math.max(c[k], 100) end
     end
     for k, name in pairs(r.parts) do
@@ -353,7 +367,6 @@ local function ReadCharacter(obj)
     end
     for k, name in pairs(r.broken) do c.broken[k] = Read(obj, name) == true end
     for k, name in pairs(r.disloc) do c.disloc[k] = Read(obj, name) == true end
-    c.isDead = (c.dead == true) or (type(c.hp) == "number" and c.hp <= 0)
 
     -- weight: physics mass of the whole body; gear: armor + weapons; height: head bone to feet
     if tickNo - (st.physTick or -1000) >= 30 then
@@ -381,6 +394,34 @@ local function ReadCharacter(obj)
         end
     end
 
+    for _, s in ipairs(SEGMENTS) do
+        local v = nil
+        for _, p in ipairs(s.parts) do
+            local pv = c.part[p]
+            if pv and (v == nil or pv < v) then v = pv end
+        end
+        c.seg[s.id] = v
+        local prev = st.segPrev[s.id]
+        if v and prev and prev - v > 0.5 then st.flash[s.id] = 1 end
+        st.segPrev[s.id] = v
+        st.flash[s.id] = math.max(0, (st.flash[s.id] or 0) - 0.05)
+    end
+    return c
+end
+
+-- Vitals and hit tracking for any fighter; full = also read the panel details
+local function ReadCharacter(obj, full)
+    local a = Addr(obj)
+    local st = states[a]
+    if not st then st = NewState(); states[a] = st end
+    st.seen = tickNo
+    local r = ResolveClass(obj)
+
+    local c = { obj = obj, st = st, r = r, part = {}, broken = {}, disloc = {}, seg = {} }
+    c.hp, c.dead, c.team = Read(obj, r.stats.hp), Read(obj, r.stats.dead), Read(obj, r.stats.team)
+    if type(c.hp) == "number" and (st.max.hp == nil or c.hp > st.max.hp) then st.max.hp = math.max(c.hp, 100) end
+    c.isDead = (c.dead == true) or (type(c.hp) == "number" and c.hp <= 0)
+
     c.drop, st.newHit = 0, false
     if type(c.hp) == "number" then
         local prev = st.prev.hp
@@ -402,19 +443,7 @@ local function ReadCharacter(obj)
         end
     end
 
-    c.seg = {}
-    for _, s in ipairs(SEGMENTS) do
-        local v = nil
-        for _, p in ipairs(s.parts) do
-            local pv = c.part[p]
-            if pv and (v == nil or pv < v) then v = pv end
-        end
-        c.seg[s.id] = v
-        local prev = st.segPrev[s.id]
-        if v and prev and prev - v > 0.5 then st.flash[s.id] = 1 end
-        st.segPrev[s.id] = v
-        st.flash[s.id] = math.max(0, (st.flash[s.id] or 0) - 0.05)
-    end
+    if full then ReadDetails(c) end
     return c
 end
 
@@ -517,7 +546,7 @@ local function Place(canvas, widget, x, y, w, h, anchor, align)
     return slot
 end
 
-local function ColorKey(c) return string.format("%.2f%.2f%.2f%.2f", c.R, c.G, c.B, c.A) end
+local function SameColor(a, b) return a ~= nil and a.R == b.R and a.G == b.G and a.B == b.B and a.A == b.A end
 
 local function Rect(tree, canvas, x, y, w, h, color, round, anchor, align)
     local img = New("/Script/UMG.Image", tree)
@@ -530,8 +559,7 @@ local function Rect(tree, canvas, x, y, w, h, color, round, anchor, align)
     end
     local e = { w = img, slot = Place(canvas, img, x, y, w, h, anchor, align) }
     e.SetColor = function(self, c)
-        local k = ColorKey(c)
-        if self.ck ~= k then self.ck = k; pcall(function() self.w:SetColorAndOpacity(c) end) end
+        if not SameColor(self.c, c) then self.c = c; pcall(function() self.w:SetColorAndOpacity(c) end) end
     end
     e:SetColor(color)
     return e
@@ -554,8 +582,7 @@ local function Label(tree, canvas, x, y, size, color, anchor, align)
         if self.txt ~= s then self.txt = s; pcall(function() self.w:SetText(ToFText(s)) end) end
     end
     e.SetColor = function(self, c)
-        local k = ColorKey(c)
-        if self.ck ~= k then self.ck = k; pcall(function() self.w:SetColorAndOpacity({ SpecifiedColor = c, ColorUseRule = 0 }) end) end
+        if not SameColor(self.c, c) then self.c = c; pcall(function() self.w:SetColorAndOpacity({ SpecifiedColor = c, ColorUseRule = 0 }) end) end
     end
     e:SetColor(color)
     e:SetText("")
@@ -782,7 +809,10 @@ local function UpdateStatsPanel(p, c, title, dmg1, dmg2)
     -- Bleeding keeps climbing on corpses, so cap the readout and hide it once dead
     local bleed = (type(c.bleed) == "number" and not c.isDead) and c.bleed or nil
     UpdateBar(b.bleed, bleed and bleed / 100 or 0, bleed and (bleed > 999 and "999+" or Fmt(bleed, 1)) or "-")
-    if p.inj then UpdateInjuryList(p.inj, Injuries(c)) end
+    if p.inj and (p.injSt ~= c.st or tickNo - (p.injTick or -100) >= 6) then
+        p.injSt, p.injTick = c.st, tickNo
+        UpdateInjuryList(p.inj, Injuries(c))
+    end
     if p.dmg1 then p.dmg1:SetText(dmg1 or ""); p.dmg2:SetText(dmg2 or "") end
     if p.phys1 then
         local st = c.st
@@ -936,14 +966,20 @@ end
 ---------------------------------------------------------------------------
 local projWarned = false
 
+local layoutLib = nil   -- a class default object: the engine never deletes it
+local function LayoutLib()
+    if not Valid(layoutLib) then layoutLib = StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary") end
+    return layoutLib
+end
+
 local function ViewportScale(ctx)
-    local ok, s = pcall(function() return StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary"):GetViewportScale(ctx) end)
+    local ok, s = pcall(function() return LayoutLib():GetViewportScale(ctx) end)
     if ok and type(s) == "number" and s > 0 then return s end
     return 1
 end
 
 local function ViewportSize(ctx)
-    local ok, v = pcall(function() return StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary"):GetViewportSize(ctx) end)
+    local ok, v = pcall(function() return LayoutLib():GetViewportSize(ctx) end)
     if ok and v then
         local ok2, x, y = pcall(function() return v.X, v.Y end)
         if ok2 and type(x) == "number" and x > 0 then return x, y end
@@ -975,6 +1011,7 @@ local function CrosshairEnemy(player, enemies, pc, radiusFrac)
     local best, bestD = nil, vh * radiusFrac
     for _, c in ipairs(enemies) do
         if c.dist <= FOCUS_RANGE then
+            c.head = c.head or HeadLocation(c.obj)
             local x, y = ToScreenPx(pc, c.head)
             if x then
                 local d = math.sqrt((x - vw / 2) ^ 2 + (y - vh / 2) ^ 2)
@@ -1008,6 +1045,7 @@ local function LockedEnemy(player, enemies, pc)
     if lockAt then
         local best, bestD = nil, 3.0
         for _, c in ipairs(enemies) do
+            if c.dist <= FOCUS_RANGE then c.head = c.head or HeadLocation(c.obj) end
             local d = math.min(Dist(c.head, lockAt), Dist(c.loc, lockAt))
             if d < bestD then best, bestD = c, d end
         end
@@ -1095,6 +1133,10 @@ end
 local cooldown = 0
 local lastWorld, lastPawn = nil, nil
 
+-- Assigned at the bottom of the file; Tick runs them on the game thread
+local ProcessKeys, DumpProps
+local dumpPending = true   -- one automatic property dump per game session
+
 local function ResetWorldState(ticks)
     states = {}
     taggedAddr = nil
@@ -1103,6 +1145,7 @@ end
 
 local function Tick()
     tickNo = tickNo + 1
+    if ProcessKeys then ProcessKeys() end
 
     local world = nil
     pcall(function() world = UEHelpers.GetWorld() end)
@@ -1138,7 +1181,12 @@ local function Tick()
         HideCombat()
         return
     end
-    local me = player and ReadCharacter(player)
+    local me = player and ReadCharacter(player, true)
+    -- Property names change with game updates, so keep a fresh dump for troubleshooting (also F9)
+    if dumpPending and DumpProps and me and type(me.hp) == "number" and (me.st.aliveTicks or 0) >= 60 then
+        dumpPending = false
+        pcall(DumpProps)
+    end
     if not (me and type(me.hp) == "number") or not S.hud then
         HideCombat()
         if not (me and type(me.hp) == "number") then fileText = "Fechtbuch: waiting for your fighter..." end
@@ -1155,9 +1203,8 @@ local function Tick()
         if Addr(o) ~= myAddr then
             local c = ReadCharacter(o)
             if type(c.hp) == "number" then
-                c.loc = ActorLocation(o)
-                c.head = HeadLocation(o)
-                c.dist = Dist(c.loc or c.head, myLoc)
+                c.loc = ActorLocation(o) or HeadLocation(o)
+                c.dist = Dist(c.loc, myLoc)
                 c.enemy = (c.team == nil or me.team == nil or c.team ~= me.team)
                 if c.enemy and c.drop > 0 then
                     -- enemies don't fight each other, so their health loss is credited to you
@@ -1180,6 +1227,10 @@ local function Tick()
     local pc = nil
     pcall(function() pc = UEHelpers.GetPlayerController() end)
     local focus = PickFocus(player, enemies, pc)
+    if focus then
+        ReadDetails(focus)
+        focus.head = focus.head or HeadLocation(focus.obj)
+    end
 
     if toast.life > 0 then
         hud.toast:SetText(toast.text)
@@ -1272,15 +1323,17 @@ local function Tick()
     end
 end
 
+local writtenText = nil
 local function WriteFile()
+    if fileText == writtenText then return end
     local f = io.open(MOD_DIR .. "\\stats.txt", "w")
-    if f then f:write(fileText); f:close() end
+    if f then f:write(fileText); f:close(); writtenText = fileText end
 end
 
 ---------------------------------------------------------------------------
 -- Property dump (F9)
 ---------------------------------------------------------------------------
-local function DumpProps()
+DumpProps = function()
     local target = GetPlayerPawn()
     if not (target and ResolveClass(target).stats.hp) then
         target = nil
@@ -1296,7 +1349,10 @@ local function DumpProps()
         cls:ForEachProperty(function(prop)
             local n = prop:GetFName():ToString()
             local t = prop:GetClass():GetFName():ToString()
-            local ok, v = pcall(function() return target[n] end)
+            -- read values of plain number/bool properties only; other kinds are listed by name
+            local plain = t:find("Float") or t:find("Double") or t:find("Int") or t:find("Bool") or t:find("Byte")
+            local ok, v = false, nil
+            if plain then ok, v = pcall(function() return target[n] end) end
             if ok and (type(v) == "number" or type(v) == "boolean") then
                 table.insert(out, string.format("  %-16s %-42s = %s", t, n, tostring(v)))
             else
@@ -1374,20 +1430,47 @@ local function MenuChange(dir, enter)
     Changed()
 end
 
-RegisterKeyBind(Key.HOME, function() menuOpen = not menuOpen; menuDirty = true end)
-RegisterKeyBind(Key.UP_ARROW, function() if menuOpen then MenuMove(-1) end end)
-RegisterKeyBind(Key.DOWN_ARROW, function() if menuOpen then MenuMove(1) end end)
-RegisterKeyBind(Key.LEFT_ARROW, function() if menuOpen then MenuChange(-1) end end)
-RegisterKeyBind(Key.RIGHT_ARROW, function() if menuOpen then MenuChange(1) end end)
-RegisterKeyBind(Key.RETURN, function() if menuOpen then MenuChange(0, true) end end)
+-- Key callbacks do not run on the game thread, and Lua running on two threads at once is what
+-- crashed the game before. So a callback only bumps a counter in this pre-filled table (no
+-- allocation, no game objects); Tick picks the presses up on the game thread.
+local keys = { home = 0, up = 0, down = 0, left = 0, right = 0, enter = 0, z = 0, f7 = 0, f8 = 0, f9 = 0 }
+local function Bind(key, name) RegisterKeyBind(key, function() keys[name] = keys[name] + 1 end) end
 
-RegisterKeyBind(Key.Z, function() zPressed = true end)
-RegisterKeyBind(Key.F7, function() S.hud = not S.hud; Changed() end)
-RegisterKeyBind(Key.F8, function()
-    states = {}
-    session = { dealt = 0, dealtHits = 0, maxDealt = 0, kills = 0 }
-    Log("counters reset")
-end)
-RegisterKeyBind(Key.F9, DumpProps)
+local function Take(name)
+    local v = keys[name]
+    if v > 0 then keys[name] = 0 end
+    return math.min(v, 5)
+end
 
-Log("loaded from %s", MOD_DIR)
+ProcessKeys = function()
+    if Take("home") % 2 == 1 then menuOpen = not menuOpen; menuDirty = true end
+    local up, down, left, right, enter = Take("up"), Take("down"), Take("left"), Take("right"), Take("enter")
+    if menuOpen then
+        for _ = 1, up do MenuMove(-1) end
+        for _ = 1, down do MenuMove(1) end
+        for _ = 1, left do MenuChange(-1) end
+        for _ = 1, right do MenuChange(1) end
+        for _ = 1, enter do MenuChange(0, true) end
+    end
+    if Take("z") > 0 then zPressed = true end
+    if Take("f7") % 2 == 1 then S.hud = not S.hud; Changed() end
+    if Take("f8") > 0 then
+        states = {}
+        session = { dealt = 0, dealtHits = 0, maxDealt = 0, kills = 0 }
+        Log("counters reset")
+    end
+    if Take("f9") > 0 then dumpPending = true end
+end
+
+Bind(Key.HOME, "home")
+Bind(Key.UP_ARROW, "up")
+Bind(Key.DOWN_ARROW, "down")
+Bind(Key.LEFT_ARROW, "left")
+Bind(Key.RIGHT_ARROW, "right")
+Bind(Key.RETURN, "enter")
+Bind(Key.Z, "z")
+Bind(Key.F7, "f7")
+Bind(Key.F8, "f8")
+Bind(Key.F9, "f9")
+
+Log("v%s loaded from %s", VERSION, MOD_DIR)

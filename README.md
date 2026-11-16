@@ -47,7 +47,7 @@ Windows SmartScreen may warn about the installer because it isn't code-signed: c
 | Home | Open / close the Fechtbuch menu (arrows to change, Enter to toggle) |
 | F7 | HUD on / off |
 | F8 | Reset damage counters |
-| F9 | Save every property of your fighter to `props_dump.txt` (for troubleshooting) |
+| F9 | Save every property of your fighter to `props_dump.txt` (for troubleshooting; also saved once automatically each time you start the game) |
 
 ## Uninstall
 
@@ -55,9 +55,10 @@ Run the installer and choose **2** (Fechtbuch only) or **3** (Fechtbuch and UE4S
 
 ## Notes
 
-- Tested on Half Sword Early Access 0.6.1.5 with the UE4SS experimental build (Unreal Engine 5.4).
+- Tested on Half Sword Early Access 0.6.1.5 with the UE4SS experimental build (Unreal Engine 5.4). Version 1.1.0 also loads on 0.7 "The Crypts" with UE4SS v3.0.1 Beta; 1.2.0 has not been played on 0.7 yet.
+- On 0.7 the game no longer has the pending strength gain (`Muscle Rate Due`), so the strength bar shows no pending part. The new energy, wound healing and faction stats are not shown yet: `UE4SS.log` lists their names in a `[Fechtbuch] class ... unmapped:` line, and `docs/hud-upgrades-0.7.md` has the plan for them.
 - Weight is the physics mass of the body and height is measured from the head to the feet, so both are close estimates.
-- Damage dealt counts health lost by enemies, so it assumes enemies don't hurt each other.
+- Damage dealt counts health lost by enemies, so it assumes enemies don't hurt each other. In 0.7 factions can fight each other, so the total can include damage you didn't deal.
 - The game doesn't expose its own maximum for strength and skill progress; the bars treat 100% as the cap.
 - If the in-game HUD doesn't show, right-click `ue4ss\Mods\Fechtbuch\overlay.ps1` → *Run with PowerShell* for a separate stats window (run the game in borderless/windowed mode).
 
