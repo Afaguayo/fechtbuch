@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Fechtbuch: combat HUD for Half Sword">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#241a14"/>
+      <stop offset="1" stop-color="#0c0908"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f2c766"/>
+      <stop offset="1" stop-color="#c71a12"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="400" fill="url(#bg)"/>
+  <circle cx="850" cy="200" r="150" fill="#c71a12" opacity="0.16" filter="url(#glow)"/>
+  <circle cx="1120" cy="250" r="120" fill="#f2c766" opacity="0.10" filter="url(#glow)"/>
+
+  <!-- wordmark -->
+  <text x="80" y="185" font-family="Georgia, 'Times New Roman', serif" font-size="104" font-weight="700" fill="#f3ead8" letter-spacing="-2">Fechtbuch</text>
+  <rect x="84" y="210" width="210" height="8" rx="4" fill="url(#accent)"/>
+  <text x="82" y="270" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="34" fill="#d9ccb4">see what the fight is doing to you.</text>
+  <text x="82" y="320" font-family="Consolas, Menlo, monospace" font-size="20" fill="#8f8372">Half Sword · combat HUD · UE4SS Lua mod</text>
+
+  <!-- HUD panel (illustration of the in-game panel) -->
+  <rect x="740" y="22" width="480" height="356" rx="14" fill="#050505" opacity="0.55"/>
+  <text x="760" y="50" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="17" font-weight="700" fill="#ede3cc">YOU</text>
+
+  <g>
+    <rect x="826.1" y="60.0" width="34.2" height="36.6" rx="13.7" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="835.9" y="97.8" width="14.6" height="11.0" rx="2.0" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="813.9" y="110.0" width="58.6" height="48.8" rx="5.9" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="817.6" y="160.0" width="51.2" height="31.7" rx="3.9" fill="#f9d14d" opacity="0.75"/>
+    <rect x="815.1" y="193.0" width="56.1" height="26.8" rx="5.9" fill="#f9d14d" opacity="0.75"/>
+    <rect x="840.8" y="112.5" width="4.9" height="104.9" rx="2.0" fill="#b8af9b" opacity="0.90"/>
+    <rect x="849.3" y="121.0" width="14.6" height="15.9" rx="4.9" fill="#e61f29" opacity="1.00"/>
+    <rect x="792.0" y="110.0" width="20.7" height="19.5" rx="7.8" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="789.5" y="130.8" width="18.3" height="43.9" rx="5.9" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="788.3" y="175.9" width="15.9" height="11.0" rx="3.9" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="784.6" y="188.1" width="17.1" height="43.9" rx="5.9" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="782.2" y="233.2" width="17.1" height="18.3" rx="5.9" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="873.7" y="110.0" width="20.7" height="19.5" rx="7.8" fill="#9e52f2" opacity="0.95"/>
+    <rect x="878.6" y="130.8" width="18.3" height="43.9" rx="5.9" fill="#ff731a" opacity="0.90"/>
+    <rect x="882.2" y="175.9" width="15.9" height="11.0" rx="3.9" fill="#ff731a" opacity="0.90"/>
+    <rect x="884.7" y="188.1" width="17.1" height="43.9" rx="5.9" fill="#d9140d" opacity="0.95"/>
+    <rect x="887.1" y="233.2" width="17.1" height="18.3" rx="5.9" fill="#ff731a" opacity="0.90"/>
+    <rect x="816.4" y="221.0" width="24.4" height="61.0" rx="5.9" fill="#f9d14d" opacity="0.80"/>
+    <rect x="817.6" y="283.3" width="22.0" height="12.2" rx="4.9" fill="#f9d14d" opacity="0.80"/>
+    <rect x="818.8" y="296.7" width="19.5" height="58.6" rx="5.9" fill="#f9d14d" opacity="0.80"/>
+    <rect x="811.5" y="356.5" width="28.1" height="14.6" rx="4.9" fill="#f9d14d" opacity="0.80"/>
+    <rect x="845.6" y="221.0" width="24.4" height="61.0" rx="5.9" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="846.9" y="283.3" width="22.0" height="12.2" rx="4.9" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="848.1" y="296.7" width="19.5" height="58.6" rx="5.9" fill="#e6dbc2" opacity="0.55"/>
+    <rect x="846.9" y="356.5" width="28.1" height="14.6" rx="4.9" fill="#e6dbc2" opacity="0.55"/>
+  </g>
+  <rect x="884.2" y="201.8" width="18" height="3.5" fill="#7a0000" transform="rotate(-35 893.2 203.5)"/>
+  <rect x="891.5" y="212.5" width="3.4" height="7" rx="1.7" fill="#d90808" opacity="0.95"/>
+  <rect x="891.5" y="227.5" width="3.4" height="7" rx="1.7" fill="#d90808" opacity="0.50"/>
+  <rect x="818.3" y="243.7" width="18" height="3.5" fill="#7a0000" transform="rotate(35 827.3 245.4)"/>
+  <rect x="825.6" y="254.4" width="3.4" height="7" rx="1.7" fill="#d90808" opacity="0.95"/>
+  <rect x="825.6" y="269.4" width="3.4" height="7" rx="1.7" fill="#d90808" opacity="0.50"/>
+  <rect x="824.0" y="174.2" width="18" height="3.5" fill="#7a0000" transform="rotate(-35 833.0 175.9)"/>
+  <rect x="831.3" y="184.9" width="3.4" height="7" rx="1.7" fill="#d90808" opacity="0.95"/>
+  <rect x="831.3" y="199.9" width="3.4" height="7" rx="1.7" fill="#d90808" opacity="0.50"/>
+  <text x="940" y="78" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#b3a894">HEALTH</text>
+  <text x="1198" y="78" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#ede3cc">71 / 100</text>
+  <rect x="940" y="83" width="258" height="7" rx="2" fill="#000000" opacity="0.55"/>
+  <rect x="940" y="83" width="183" height="7" rx="2" fill="#c71a12"/>
+  <text x="940" y="112" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#b3a894">CONSCIOUSNESS</text>
+  <text x="1198" y="112" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#ede3cc">88%</text>
+  <rect x="940" y="117" width="258" height="7" rx="2" fill="#000000" opacity="0.55"/>
+  <rect x="940" y="117" width="227" height="7" rx="2" fill="#8cbff2"/>
+  <text x="940" y="146" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#b3a894">STAMINA</text>
+  <text x="1198" y="146" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#ede3cc">64%</text>
+  <rect x="940" y="151" width="258" height="7" rx="2" fill="#000000" opacity="0.55"/>
+  <rect x="940" y="151" width="165" height="7" rx="2" fill="#f2b340"/>
+  <text x="940" y="180" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#b3a894">ENERGY</text>
+  <text x="1198" y="180" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#ede3cc">80%</text>
+  <rect x="940" y="185" width="258" height="7" rx="2" fill="#000000" opacity="0.55"/>
+  <rect x="940" y="185" width="206" height="7" rx="2" fill="#99d959"/>
+  <text x="940" y="214" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#b3a894">PAIN</text>
+  <text x="1198" y="214" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#ede3cc">23.5</text>
+  <rect x="940" y="219" width="258" height="7" rx="2" fill="#000000" opacity="0.55"/>
+  <rect x="940" y="219" width="62" height="7" rx="2" fill="#b266e6"/>
+  <text x="940" y="248" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#b3a894">BLEEDING</text>
+  <text x="1198" y="248" text-anchor="end" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="12" fill="#ede3cc">4.2   out in ~38 s</text>
+  <rect x="940" y="253" width="258" height="7" rx="2" fill="#000000" opacity="0.55"/>
+  <rect x="940" y="253" width="108" height="7" rx="2" fill="#8c0005"/>
+  <text x="940" y="296" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#d91a1a">Left arm: BROKEN, Critical 18%, worse</text>
+  <text x="940" y="316" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#ff4026">Left arm: dislocated</text>
+  <text x="940" y="336" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#ff8c33">Right leg: Wounded 52%, healing</text>
+  <text x="940" y="356" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#fad966">Abdomen: Bruised 78%</text>
+</svg>

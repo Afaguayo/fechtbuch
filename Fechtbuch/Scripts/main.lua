@@ -5,6 +5,9 @@
 --     enemy gets a stats card (incl. weight, height, strength), a tag over their head and
 --     floating damage numbers. Press Z on them again to untag. Unfocused enemies show nothing.
 --   * Your panel also shows weight/height and strength + skill progress bars.
+--   * Cuts are drawn on the body diagram where they landed, with blood dripping from them.
+--   * Threat list: the three nearest living enemies with distance, health and side (left/right/behind).
+--   * After a fight a short recap shows time, damage, hits and kills.
 --   * Home opens the Fechtbuch menu: choose what shows, where panels go and how big they are.
 --     Settings are saved to settings.txt next to this mod.
 --
@@ -12,19 +15,30 @@
 
 local UEHelpers = require("UEHelpers")
 
+local VERSION      = "1.5.1"
+
 local TICK_MS      = 33     -- HUD refresh (~30 fps)
 local SCAN_EVERY   = 300    -- look for new fighter classes every N ticks (~10 s)
 local HIT_MIN      = 0.5    -- smallest health drop counted as a hit
 local HIT_MERGE    = 6      -- drops within this many ticks count as one blow
 local FOCUS_RANGE  = 20     -- meters
+local THREAT_RANGE = 30     -- meters: threat list and fight tracking
+local CREDIT_RANGE = 5      -- meters: an enemy's health loss counts as your hit inside this reach
+local BLEED_MAX    = 10     -- 0.7 bleeding runs 0..10 (seen in play: 5.56 on a wounded enemy, 10.00 at most)
+local BLEED_HEAVY  = 5      -- bleeding above this triggers the warning
+local IDLE_SKIP    = 3      -- with no fight going on, refresh every Nth tick (~10 fps)
 
 ---------------------------------------------------------------------------
--- Property names (Early Access Willie_BP; matched ignoring case/spaces/underscores)
+-- Property names (Early Access Willie_BP, checked on 0.6.1.5 and 0.7; matched ignoring
+-- case/spaces/underscores). A name the game no longer has reads as nil and its readout shows "-".
 ---------------------------------------------------------------------------
 local STATS = {
     hp        = { "Health" },
     cons      = { "Consciousness" },
     stamina   = { "Stamina" },
+    energy    = { "SMH Energy" },                              -- 0.7 energy system, 0..1
+    exhaust   = { "Exhaustion" },                              -- 0.7; scale not known yet, shown raw
+    fear      = { "Fear" },                                    -- 0.7; scale not known yet, shown raw
     pain      = { "Pain" },
     bleed     = { "Bleeding" },
     dead      = { "DED" },
@@ -35,7 +49,7 @@ local STATS = {
     lockFound = { "Lock On Found" },
     muscle    = { "Muscle Power" },
     muscleRate = { "Muscle Rate" },
-    muscleDue = { "Muscle Rate Due" },
+    muscleDue = { "Muscle Rate Due", "Muscle Growth Due" },   -- renamed in 0.7
     wSkill    = { "Weapon Skill (Temp)" },
     wSkillDue = { "Weapon Skill Due (Temp)" },
     bSkill    = { "Body Skill (Temp)" },
@@ -49,6 +63,7 @@ local PARTS = {
     upper = { "Body Upper Health", "Body Health" },
     lower = { "Body Lower Health" },
     back  = { "Back Health" },
+    heart = { "Heart Health" },                                -- new in 0.7
     armR  = { "Arm_R Health" }, armL = { "Arm_L Health" },
     legR  = { "Leg_R Health" }, legL = { "Leg_L Health" },
 }
@@ -63,28 +78,39 @@ local DISLOCATED = {
     legR = { "Leg R Dislocated" }, legL = { "Leg L Dislocated" },
 }
 local REGIONS = {
-    { "head", "Head" }, { "neck", "Neck" }, { "upper", "Chest" }, { "lower", "Abdomen" }, { "back", "Back" },
+    { "head", "Head" }, { "neck", "Neck" }, { "upper", "Chest" }, { "heart", "Heart" }, { "lower", "Abdomen" }, { "back", "Back" },
     { "armR", "Right arm" }, { "armL", "Left arm" }, { "legR", "Right leg" }, { "legL", "Left leg" },
 }
 
 -- Body diagram, front view (the fighter's right side is on the left). Pixels at size 100%.
+-- parts: health regions that color the shape (the worst one wins). broken / disloc: flags that
+-- override the color. shade: drawn darker so it stands out from the shape under it.
 local SEGMENTS = {
-    { id = "head",   x = 46, y = 0,   w = 28, h = 32, parts = { "head" },          broken = "head", round = 14 },
-    { id = "neck",   x = 54, y = 33,  w = 12, h = 10, parts = { "neck" },          disloc = "neck" },
-    { id = "chest",  x = 34, y = 44,  w = 52, h = 52, parts = { "upper", "back" }, broken = "back", disloc = "back", round = 6 },
-    { id = "pelvis", x = 38, y = 97,  w = 44, h = 36, parts = { "lower" },         round = 6 },
-    { id = "uArmR",  x = 16, y = 46,  w = 16, h = 46, parts = { "armR" }, broken = "armR", disloc = "armR", round = 6 },
-    { id = "fArmR",  x = 12, y = 93,  w = 15, h = 44, parts = { "armR" }, broken = "armR", round = 6 },
-    { id = "handR",  x = 10, y = 138, w = 15, h = 16, parts = { "armR" }, round = 6 },
-    { id = "uArmL",  x = 88, y = 46,  w = 16, h = 46, parts = { "armL" }, broken = "armL", disloc = "armL", round = 6 },
-    { id = "fArmL",  x = 93, y = 93,  w = 15, h = 44, parts = { "armL" }, broken = "armL", round = 6 },
-    { id = "handL",  x = 95, y = 138, w = 15, h = 16, parts = { "armL" }, round = 6 },
-    { id = "thighR", x = 38, y = 135, w = 20, h = 56, parts = { "legR" }, broken = "legR", disloc = "legR", round = 6 },
-    { id = "shinR",  x = 39, y = 192, w = 18, h = 52, parts = { "legR" }, broken = "legR", round = 6 },
-    { id = "footR",  x = 34, y = 245, w = 24, h = 12, parts = { "legR" }, round = 5 },
-    { id = "thighL", x = 62, y = 135, w = 20, h = 56, parts = { "legL" }, broken = "legL", disloc = "legL", round = 6 },
-    { id = "shinL",  x = 63, y = 192, w = 18, h = 52, parts = { "legL" }, broken = "legL", round = 6 },
-    { id = "footL",  x = 62, y = 245, w = 24, h = 12, parts = { "legL" }, round = 5 },
+    { id = "head",      x = 46, y = 0,   w = 28, h = 30, parts = { "head" }, broken = "head", round = 14 },
+    { id = "neck",      x = 54, y = 31,  w = 12, h = 9,  parts = { "neck" }, disloc = "neck" },
+    { id = "chest",     x = 36, y = 41,  w = 48, h = 40, parts = { "upper" }, round = 6 },
+    { id = "abdomen",   x = 39, y = 82,  w = 42, h = 26, parts = { "lower" }, round = 4 },
+    { id = "pelvis",    x = 37, y = 109, w = 46, h = 22, parts = { "lower" }, round = 6 },
+    { id = "spine",     x = 58, y = 43,  w = 4,  h = 86, parts = { "back" }, broken = "back", disloc = "back", round = 2, shade = 0.72 },
+    { id = "heart",     x = 65, y = 50,  w = 12, h = 13, parts = { "heart" }, round = 5, heart = true },
+    { id = "shoulderR", x = 18, y = 41,  w = 17, h = 16, parts = { "armR" }, disloc = "armR", round = 8, shade = 0.85 },
+    { id = "uArmR",     x = 16, y = 58,  w = 15, h = 36, parts = { "armR" }, broken = "armR", round = 6 },
+    { id = "elbowR",    x = 15, y = 95,  w = 13, h = 9,  parts = { "armR" }, round = 4, shade = 0.85 },
+    { id = "fArmR",     x = 12, y = 105, w = 14, h = 36, parts = { "armR" }, broken = "armR", round = 6 },
+    { id = "handR",     x = 10, y = 142, w = 14, h = 15, parts = { "armR" }, round = 6 },
+    { id = "shoulderL", x = 85, y = 41,  w = 17, h = 16, parts = { "armL" }, disloc = "armL", round = 8, shade = 0.85 },
+    { id = "uArmL",     x = 89, y = 58,  w = 15, h = 36, parts = { "armL" }, broken = "armL", round = 6 },
+    { id = "elbowL",    x = 92, y = 95,  w = 13, h = 9,  parts = { "armL" }, round = 4, shade = 0.85 },
+    { id = "fArmL",     x = 94, y = 105, w = 14, h = 36, parts = { "armL" }, broken = "armL", round = 6 },
+    { id = "handL",     x = 96, y = 142, w = 14, h = 15, parts = { "armL" }, round = 6 },
+    { id = "thighR",    x = 38, y = 132, w = 20, h = 50, parts = { "legR" }, broken = "legR", round = 6 },
+    { id = "kneeR",     x = 39, y = 183, w = 18, h = 10, parts = { "legR" }, disloc = "legR", round = 5, shade = 0.85 },
+    { id = "shinR",     x = 40, y = 194, w = 16, h = 48, parts = { "legR" }, broken = "legR", round = 6 },
+    { id = "footR",     x = 34, y = 243, w = 23, h = 12, parts = { "legR" }, round = 5 },
+    { id = "thighL",    x = 62, y = 132, w = 20, h = 50, parts = { "legL" }, broken = "legL", round = 6 },
+    { id = "kneeL",     x = 63, y = 183, w = 18, h = 10, parts = { "legL" }, disloc = "legL", round = 5, shade = 0.85 },
+    { id = "shinL",     x = 64, y = 194, w = 16, h = 48, parts = { "legL" }, broken = "legL", round = 6 },
+    { id = "footL",     x = 63, y = 243, w = 23, h = 12, parts = { "legL" }, round = 5 },
 }
 local BODY_W, BODY_H = 120, 257
 
@@ -96,6 +122,7 @@ local COLORS = {
     hp       = { R = 0.78, G = 0.10, B = 0.07, A = 0.95 },
     cons     = { R = 0.55, G = 0.75, B = 0.95, A = 0.95 },
     stamina  = { R = 0.95, G = 0.70, B = 0.25, A = 0.95 },
+    energy   = { R = 0.60, G = 0.85, B = 0.35, A = 0.95 },
     pain     = { R = 0.70, G = 0.40, B = 0.90, A = 0.95 },
     bleed    = { R = 0.55, G = 0.00, B = 0.02, A = 0.95 },
     unknown  = { R = 0.45, G = 0.45, B = 0.45, A = 0.30 },
@@ -119,6 +146,7 @@ local BAR_DEFS = {
     { key = "health",  title = "HEALTH",        color = COLORS.hp,      h = 8 },
     { key = "cons",    title = "CONSCIOUSNESS", color = COLORS.cons,    h = 6 },
     { key = "stamina", title = "STAMINA",       color = COLORS.stamina, h = 6 },
+    { key = "energy",  title = "ENERGY",        color = COLORS.energy,  h = 6 },
     { key = "pain",    title = "PAIN",          color = COLORS.pain,    h = 6 },
     { key = "bleed",   title = "BLEEDING",      color = COLORS.bleed,   h = 6 },
 }
@@ -145,9 +173,11 @@ local function PanelItems(prefix, pos, scale)
         { key = prefix .. ".offX",     label = "Nudge left/right",  type = "num",    min = -1500, max = 1500, step = 10, default = 0 },
         { key = prefix .. ".offY",     label = "Nudge up/down",     type = "num",    min = -1000, max = 1000, step = 10, default = 0 },
         { key = prefix .. ".body",     label = "Body diagram",      type = "bool",   default = true },
+        { key = prefix .. ".wounds",   label = "Cuts and blood on the body", type = "bool", default = true },
         { key = prefix .. ".health",   label = "Health bar",        type = "bool",   default = true },
         { key = prefix .. ".cons",     label = "Consciousness bar", type = "bool",   default = true },
         { key = prefix .. ".stamina",  label = "Stamina bar",       type = "bool",   default = true },
+        { key = prefix .. ".energy",   label = "Energy bar",        type = "bool",   default = true },
         { key = prefix .. ".pain",     label = "Pain bar",          type = "bool",   default = true },
         { key = prefix .. ".bleed",    label = "Bleeding bar",      type = "bool",   default = true },
         { key = prefix .. ".injuries", label = "Injury list",       type = "bool",   default = true },
@@ -156,14 +186,38 @@ local function PanelItems(prefix, pos, scale)
     }
 end
 
+-- Layout presets: a preset only flips the show/hide switches below; positions and sizes stay yours
+local PRESET_NAMES = { "Custom", "Full", "Compact", "Duel" }
+local function PresetTable(detail, enemyCard, threats)
+    local t = {}
+    for _, k in ipairs({ "health", "cons", "stamina", "energy", "pain", "bleed" }) do t["you." .. k] = true; t["enemy." .. k] = true end
+    for _, k in ipairs({ "body", "injuries", "damage", "physique" }) do
+        t["you." .. k] = detail
+        t["enemy." .. k] = detail or (enemyCard and (k == "body" or k == "injuries"))
+    end
+    t["you.show"], t["you.progress"], t["you.hit"], t["you.warn"] = true, detail, true, true
+    t["enemy.show"], t["enemy.tag"], t["enemy.numbers"] = enemyCard, true, true
+    t["threat.show"] = threats
+    return t
+end
+local PRESETS = {
+    Full    = PresetTable(true, true, true),      -- everything
+    Compact = PresetTable(false, false, false),   -- your bars only
+    Duel    = PresetTable(false, true, false),    -- your bars + the enemy card
+}
+
 local MENU = { { header = "GENERAL" },
     { key = "hud",       label = "Fechtbuch HUD (F7)", type = "bool", default = true },
     { key = "bgOpacity", label = "Panel background",    type = "num",  min = 0, max = 0.9, step = 0.05, default = 0.45, pct = true },
+    { key = "preset",    label = "Layout preset",       type = "choice", choices = PRESET_NAMES, default = "Custom" },
+    { key = "recap",     label = "Fight recap",         type = "bool", default = true },
+    { key = "hideInMenus", label = "Hide in menus",     type = "bool", default = true },
     { header = "YOUR PANEL" },
 }
 for _, it in ipairs(PanelItems("you", "Bottom Left", 0.75)) do table.insert(MENU, it) end
 table.insert(MENU, { key = "you.progress", label = "Strength & skill progress", type = "bool", default = true })
 table.insert(MENU, { key = "you.hit", label = "Damage taken pop-up", type = "bool", default = true })
+table.insert(MENU, { key = "you.warn", label = "Low-state warning", type = "bool", default = true })
 table.insert(MENU, { header = "FOCUSED ENEMY" })
 table.insert(MENU, { key = "enemy.focusMode", label = "Focus with", type = "choice", choices = FOCUS_MODES, default = "Z tag only" })
 for _, it in ipairs(PanelItems("enemy", "Top Right", 0.65)) do
@@ -173,6 +227,12 @@ end
 table.insert(MENU, { key = "enemy.tag",      label = "Tag over their head", type = "bool", default = true })
 table.insert(MENU, { key = "enemy.tagScale", label = "Tag size",            type = "num",  min = 0.5, max = 2, step = 0.1, default = 1, pct = true })
 table.insert(MENU, { key = "enemy.numbers",  label = "Damage numbers",      type = "bool", default = true })
+table.insert(MENU, { header = "THREAT LIST" })
+table.insert(MENU, { key = "threat.show",  label = "Show nearest enemies", type = "bool",   default = true })
+table.insert(MENU, { key = "threat.pos",   label = "Position",             type = "choice", choices = POSITIONS, default = "Middle Right" })
+table.insert(MENU, { key = "threat.scale", label = "Size",                 type = "num",    min = 0.4, max = 1.6, step = 0.05, default = 0.75, pct = true })
+table.insert(MENU, { key = "threat.offX",  label = "Nudge left/right",     type = "num",    min = -1500, max = 1500, step = 10, default = 0 })
+table.insert(MENU, { key = "threat.offY",  label = "Nudge up/down",        type = "num",    min = -1000, max = 1000, step = 10, default = 0 })
 table.insert(MENU, { header = "" })
 table.insert(MENU, { key = "reset", label = "Reset everything to defaults", type = "action" })
 table.insert(MENU, { key = "close", label = "Close menu (Home)",             type = "action" })
@@ -185,6 +245,11 @@ local function Defaults()
 end
 
 local SETTINGS_FILE = MOD_DIR .. "\\settings.txt"
+
+local function ApplyPreset(name)
+    local preset = PRESETS[name]
+    if preset then for k, v in pairs(preset) do S[k] = v end end
+end
 
 local function LoadSettings()
     S = Defaults()
@@ -287,7 +352,12 @@ local function ResolveClass(obj)
         end
         return nil
     end
-    local r = { stats = {}, parts = {}, broken = {}, disloc = {}, lockAt = have[Norm("Lock Camera At")], gear = {} }
+    local r = { stats = {}, parts = {}, broken = {}, disloc = {}, lockAt = have[Norm("Lock Camera At")], gear = {},
+                kind = cname:find("Zombie") and "REVENANT" or "ENEMY" }
+    -- where the game keeps cuts: the arrays behind its blood painting, and the last hit
+    r.w = { emitters = have[Norm("Attached Blood Emitters")],
+            bones = have[Norm("RT_Blood_Bones")], locs = have[Norm("RT_Blood_Locations")],
+            lastBone = have[Norm("Last Damaged Bone")], hitPoint = have[Norm("Body Hit Impact Point")] }
     for _, g in ipairs(GEAR) do if have[Norm(g)] then table.insert(r.gear, have[Norm(g)]) end end
     for k, list in pairs(STATS) do r.stats[k] = pick(list) end
     for k, list in pairs(PARTS) do r.parts[k] = pick(list) end
@@ -301,6 +371,19 @@ local function ResolveClass(obj)
         for k in pairs(BROKEN) do if not r.broken[k] then table.insert(missing, "broken:" .. k) end end
         for k in pairs(DISLOCATED) do if not r.disloc[k] then table.insert(missing, "disloc:" .. k) end end
         Log("class %s resolved; missing: %s", cname, #missing > 0 and table.concat(missing, ", ") or "none")
+        -- Game updates rename and add stats (0.7: energy, healing wounds, factions). List the
+        -- candidates so the log alone is enough to extend the tables above.
+        local used, extra = {}, {}
+        for _, t in ipairs({ r.stats, r.parts, r.broken, r.disloc }) do for _, pn in pairs(t) do used[pn] = true end end
+        for _, pn in pairs(have) do
+            local l = pn:lower()
+            if not used[pn] and #extra < 60 and (l:find("energy") or l:find("stamina") or l:find("muscle") or l:find("skill")
+                or l:find("wound") or l:find("heal") or l:find("faction") or l:find("lock on") or l:find("exhaust") or l:find("fear")) then
+                table.insert(extra, pn)
+            end
+        end
+        table.sort(extra)
+        if #extra > 0 then Log("class %s unmapped: %s", cname, table.concat(extra, " | ")) end
     end
     return r
 end
@@ -322,7 +405,7 @@ local tickNo = 0
 local function NewState()
     return { max = {}, prev = {}, taken = 0, hits = 0, lastHit = 0, maxHit = 0,
              curHit = 0, curHitTick = -100, newHit = false, dead = false, seen = 0,
-             dealtTo = 0, flash = {}, segPrev = {} }
+             dealtTo = 0, flash = {}, segPrev = {}, trend = {}, trendRef = {}, wounds = {}, woundN = 0 }
 end
 
 local function Pct(v, mx)
@@ -330,17 +413,388 @@ local function Pct(v, mx)
     return math.max(0, math.min(100, v / mx * 100))
 end
 
-local function ReadCharacter(obj)
-    local a = Addr(obj)
-    local st = states[a]
-    if not st then st = NewState(); states[a] = st end
-    st.seen = tickNo
-    local r = ResolveClass(obj)
+---------------------------------------------------------------------------
+-- Wounds: which bone was cut and where on it, for the marks on the body diagram
+---------------------------------------------------------------------------
+local WOUND_MAX = 8   -- marks per fighter; the oldest goes first
+local SEG_BY_ID = {}
+for _, seg in ipairs(SEGMENTS) do SEG_BY_ID[seg.id] = seg end
+local LIMB_SEG   = { upperarm = "uArm", lowerarm = "fArm", hand = "hand", thigh = "thigh", calf = "shin", foot = "foot" }
+local LIMB_CHILD = { upperarm = "lowerarm", lowerarm = "hand", thigh = "calf", calf = "foot" }
 
-    local c = { obj = obj, st = st, part = {}, broken = {}, disloc = {} }
-    for k, name in pairs(r.stats) do c[k] = Read(obj, name) end
+local function Socket(obj, name)
+    local ok, l = pcall(function() return obj.Mesh:GetSocketLocation(FName(name)) end)
+    local v = ok and Vec(l) or nil
+    if v and (v.X ~= 0 or v.Y ~= 0 or v.Z ~= 0) then return v end
+    return nil
+end
+local function Sub(a, b) return { X = a.X - b.X, Y = a.Y - b.Y, Z = a.Z - b.Z } end
+local function Dot(a, b) return a.X * b.X + a.Y * b.Y + a.Z * b.Z end
+local function Clamp(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+local function ArrLen(arr)
+    local ok, len = pcall(function() return #arr end)
+    if ok and type(len) == "number" then return len end
+    ok, len = pcall(function() return arr:GetArrayNum() end)
+    if ok and type(len) == "number" then return len end
+    return nil
+end
+
+local function NameStr(v)
+    if type(v) == "string" then return v end
+    local ok, str = pcall(function() return v:ToString() end)
+    if ok and type(str) == "string" then return str end
+    return nil
+end
+
+-- bone name -> diagram segment, limb bone (without side), side letter, default height in the segment
+local function BoneSeg(bone)
+    local b = bone:lower()
+    local side = b:match("_([lr])$") or b:match("_([lr])_")
+    local sd = side == "l" and "L" or "R"
+    for base, seg in pairs(LIMB_SEG) do
+        if b:find(base, 1, true) then return seg .. sd, base, side end
+    end
+    if b:find("thumb") or b:find("index") or b:find("middle") or b:find("ring") or b:find("pinky") then return "hand" .. sd, "hand", side end
+    if b:find("ball") or b:find("toe") then return "foot" .. sd, "foot", side end
+    if b:find("head") or b:find("jaw") then return "head" end
+    if b:find("neck") then return "neck" end
+    -- in this skeleton spine_01..03 sit low: pelvis at 71 cm, spine_03 at 88, neck at 127
+    if b:find("spine_01") then return "pelvis", nil, nil, 0.3 end
+    if b:find("spine_02") then return "abdomen", nil, nil, 0.7 end
+    if b:find("spine_03") then return "abdomen", nil, nil, 0.2 end
+    if b:find("spine") or b:find("clavicle") then return "chest", nil, nil, 0.4 end
+    if b:find("pelvis") then return "pelvis" end
+    return nil
+end
+
+-- Turn a hit (bone + position) into a spot on the diagram: fx/fy are fractions of the segment.
+-- The position is used only when it checks out against the skeleton; otherwise the mark goes on
+-- the right bone at a spread-out spot.
+local function PlaceWound(obj, bone, loc, idx)
+    if not bone then return nil end
+    local seg, base, side, fy = BoneSeg(bone)
+    if not seg then return nil end
+    local w = { seg = seg, bone = bone, born = tickNo, mode = "bone",
+                fx = 0.3 + ((idx * 37) % 41) / 100, fy = fy or (0.2 + ((idx * 53) % 61) / 100) }
+    if not loc then return w end
+    local sfx = side and ("_" .. side) or ""
+    local a = Socket(obj, base and (base .. sfx) or bone)
+    local child = base and LIMB_CHILD[base]
+    local b = child and Socket(obj, child .. sfx) or nil
+    local len2 = 0
+    local ab = nil
+    if a and b then ab = Sub(b, a); len2 = Dot(ab, ab) end
+    if a and Dist(loc, a) < 0.7 then
+        -- a world position near the bone: taken at the moment of the hit
+        w.mode = "world"
+        local rel = Sub(loc, a)
+        if seg == "chest" or seg == "abdomen" or seg == "pelvis" then
+            -- the torso is three shapes: pick one, and the height in it, from how far up the trunk the hit is
+            local pv, nk = Socket(obj, "pelvis"), Socket(obj, "neck_01")
+            local up = pv and nk and Sub(nk, pv) or nil
+            local up2 = up and Dot(up, up) or 0
+            if up2 > 1 then
+                local t = Clamp(Dot(Sub(loc, pv), up) / up2, 0, 1)
+                if t < 0.2 then w.seg, w.fy = "pelvis", Clamp(1 - t / 0.2, 0.1, 0.9)
+                elseif t < 0.5 then w.seg, w.fy = "abdomen", Clamp(1 - (t - 0.2) / 0.3, 0.05, 0.95)
+                else w.seg, w.fy = "chest", Clamp(1 - (t - 0.5) / 0.5, 0.05, 0.95) end
+            end
+        end
+        if len2 > 1 then
+            local t = Clamp(Dot(rel, ab) / len2, 0, 1)
+            w.fy = Clamp(t, 0.05, 0.95)
+            rel = Sub(rel, { X = ab.X * t, Y = ab.Y * t, Z = ab.Z * t })
+        end
+        local rs, ls = Socket(obj, "upperarm_r"), Socket(obj, "upperarm_l")
+        if rs and ls then
+            local d = Sub(rs, ls)
+            local len = math.sqrt(Dot(d, d))
+            local half = (seg == "chest" or seg == "abdomen" or seg == "pelvis") and 18 or seg == "head" and 9 or 7   -- cm
+            -- the diagram is a front view: the fighter's right is on the left
+            if len > 1 then w.fx = Clamp(0.5 - Dot(rel, d) / len / (2 * half), 0.1, 0.9) end
+        end
+    elseif len2 > 1 and math.abs(loc.X) < 60 and math.abs(loc.Y) < 60 and math.abs(loc.Z) < 60 then
+        -- a small offset from the bone: X runs along the bone
+        w.mode = "local"
+        w.fy = Clamp(math.abs(loc.X) / math.sqrt(len2), 0.05, 0.95)
+    end
+    return w
+end
+
+-- What the game reported for each wound, kept in wounds_dump.txt to check the placement against
+local woundLog, woundLogDirty, woundDumpWanted = {}, false, false
+local function LogWound(c, src, idx, bone, loc, w)
+    if #woundLog >= 150 then return end
+    if #woundLog == 0 then woundDumpWanted = true end
+    table.insert(woundLog, string.format("tick=%d %s src=%s n=%d bone=%s loc=%s -> %s", tickNo, c.r.kind, src, idx, tostring(bone),
+        loc and string.format("(%.1f, %.1f, %.1f)", loc.X, loc.Y, loc.Z) or "none",
+        w and string.format("mode=%s seg=%s fx=%.2f fy=%.2f", w.mode, w.seg, w.fx, w.fy) or "no segment for this bone"))
+    woundLogDirty = true
+end
+
+local function FlushWoundLog()
+    if not woundLogDirty then return end
+    woundLogDirty = false
+    local f = io.open(MOD_DIR .. "\\wounds_dump.txt", "w")
+    if f then f:write(table.concat(woundLog, "\n")); f:close() end
+end
+
+local function AddWound(c, src, idx, bone, loc)
+    local w = PlaceWound(c.obj, bone, loc, idx)
+    LogWound(c, src, idx, bone, loc, w)
+    if not w then return end
+    w.idx = idx
+    table.insert(c.st.wounds, w)
+    while #c.st.wounds > WOUND_MAX do table.remove(c.st.wounds, 1) end
+end
+
+-- The bone a world position is on: the closest bone of the skeleton, within 60 cm
+local NEAR_BONES = { "head", "neck_01", "spine_03", "spine_02", "spine_01", "pelvis" }
+for _, sd in ipairs({ "r", "l" }) do
+    for _, b in ipairs({ "upperarm", "lowerarm", "hand", "thigh", "calf", "foot" }) do table.insert(NEAR_BONES, b .. "_" .. sd) end
+end
+local TRUNK_NEXT = { pelvis = "spine_01", spine_01 = "spine_02", spine_02 = "spine_03", spine_03 = "neck_01", neck_01 = "head" }
+local function NearestBone(obj, loc)
+    local best, bestD = nil, 0.6
+    for _, name in ipairs(NEAR_BONES) do
+        local a = Socket(obj, name)
+        if a then
+            local d = Dist(loc, a)
+            local base, side = name:match("^(%a+)_([lr])$")
+            local child = base and LIMB_CHILD[base]
+            local b = child and Socket(obj, child .. "_" .. side) or TRUNK_NEXT[name] and Socket(obj, TRUNK_NEXT[name]) or nil
+            if b then   -- distance to the whole bone, not only to its joint
+                local ab = Sub(b, a)
+                local len2 = Dot(ab, ab)
+                if len2 > 1 then
+                    local t = Clamp(Dot(Sub(loc, a), ab) / len2, 0, 1)
+                    d = Dist(loc, { X = a.X + ab.X * t, Y = a.Y + ab.Y * t, Z = a.Z + ab.Z * t })
+                end
+            end
+            if d < bestD then best, bestD = name, d end
+        end
+    end
+    return best
+end
+
+-- health region -> the shapes a cut on it can be drawn on
+local PART_SEGS = {
+    head = { "head" }, neck = { "neck" }, upper = { "chest" }, heart = { "chest" }, back = { "chest", "abdomen" },
+    lower = { "abdomen", "pelvis" }, armR = { "uArmR", "fArmR" }, armL = { "uArmL", "fArmL" },
+    legR = { "thighR", "shinR" }, legL = { "thighL", "shinL" },
+}
+
+-- A cut on the body part that lost the most health in the last two seconds: the right limb,
+-- at a spread-out spot. Used when the game gives no usable position.
+local function PartWound(c)
+    local st = c.st
+    local lw = st.lastWorst
+    if not lw or tickNo - lw.tick > 60 then return nil end
+    local segs = PART_SEGS[lw.part]
+    if not segs then return nil end
+    return { seg = segs[st.woundN % #segs + 1], bone = "part:" .. lw.part, born = tickNo, mode = "part",
+             fx = 0.3 + ((st.woundN * 37) % 41) / 100, fy = 0.2 + ((st.woundN * 53) % 61) / 100 }
+end
+
+-- Add a cut unless it repeats one that is already drawn at that spot
+local function KeepWound(st, wd)
+    if not wd then return end
+    for _, o in ipairs(st.wounds) do
+        if o.seg == wd.seg then
+            if wd.mode == "part" then
+                if tickNo - o.born < 90 then return end
+            elseif math.abs(o.fx - wd.fx) < 0.12 and math.abs(o.fy - wd.fy) < 0.12 then
+                return
+            end
+        end
+    end
+    wd.idx = st.woundN
+    table.insert(st.wounds, wd)
+    while #st.wounds > WOUND_MAX do table.remove(st.wounds, 1) end
+end
+
+-- The objects in an array property, whichever way this UE4SS build hands them out
+local function ArrayObjects(arr, count)
+    local objs = {}
+    pcall(function()
+        arr:ForEach(function(index, elem)
+            local o = elem
+            pcall(function() o = elem:get() end)
+            objs[index] = o
+        end)
+    end)
+    if objs[0] ~= nil then   -- zero-based
+        for i = count, 1, -1 do objs[i] = objs[i - 1] end
+    end
+    for i = 1, count do
+        if objs[i] == nil then pcall(function() objs[i] = arr[i] end) end
+    end
+    return objs
+end
+
+-- Source 1: the blood emitters the game attaches when a fighter is cut. They are short-lived
+-- (seen in play: 1 to 4 at a time, gone within seconds), so a new emitter means "a cut just
+-- happened" and its mark stays after the emitter is gone. Returns true when this source is in use.
+local function ReadEmitters(c)
+    local obj, st, w = c.obj, c.st, c.r.w
+    if not w.emitters then return false end
+    local arr = nil
+    pcall(function() arr = obj[w.emitters] end)
+    local count = arr and ArrLen(arr) or nil
+    if not count then return false end
+    st.woundSrc = "emitter"
+    local had = st.emitN or 0
+    st.emitN = count
+    if count <= had then return true end
+    local objs = ArrayObjects(arr, count)
+    for i = had + 1, count do
+        local comp, loc, sock = objs[i], nil, nil
+        local ok = comp ~= nil and Valid(comp)
+        if ok then
+            pcall(function() loc = Vec(comp:K2_GetComponentLocation()) end)
+            pcall(function() sock = NameStr(comp:GetAttachSocketName()) end)
+        end
+        local bone = (sock and BoneSeg(sock)) and sock or (loc and NearestBone(obj, loc)) or nil
+        st.woundN = st.woundN + 1
+        local wd = PlaceWound(obj, bone, loc, st.woundN) or PartWound(c)
+        LogWound(c, string.format("emitter(%s) socket=%s", ok and "ok" or ("unreadable " .. type(comp)), tostring(sock)),
+            st.woundN, wd and wd.bone or bone, loc, wd)
+        KeepWound(st, wd)
+    end
+    return true
+end
+
+-- Source 2: the arrays behind the game's blood painting. Returns true when in use.
+local function ReadBloodArrays(c)
+    local obj, st, w = c.obj, c.st, c.r.w
+    if not w.bones then return false end
+    local arr = nil
+    pcall(function() arr = obj[w.bones] end)
+    local count = arr and ArrLen(arr) or nil
+    if not count or (count == 0 and st.woundSrc ~= "array") then return false end
+    if count < st.woundN then   -- healed or cleaned up: the game drops the oldest entries first
+        local gone, kept = st.woundN - count, {}
+        for _, old in ipairs(st.wounds) do
+            old.idx = old.idx - gone
+            if old.idx >= 1 then table.insert(kept, old) end
+        end
+        st.wounds, st.woundN = kept, count
+    end
+    if count > st.woundN then
+        if st.woundSrc ~= "array" then st.wounds, st.woundN = {}, 0 end
+        local locs = nil
+        if w.locs then pcall(function() locs = obj[w.locs] end) end
+        for i = math.max(st.woundN + 1, count - WOUND_MAX + 1), count do
+            local bone, loc = nil, nil
+            pcall(function() bone = NameStr(arr[i]) end)
+            if locs then pcall(function() loc = Vec(locs[i]) end) end
+            AddWound(c, "array", i, bone, loc)
+        end
+        st.woundN = count
+    end
+    st.woundSrc = "array"
+    return true
+end
+
+local function ReadWounds(c)
+    local obj, st, w = c.obj, c.st, c.r.w
+    st.woundRead = true
+    -- which body part is losing health: the fallback spot for a cut without a usable position
+    st.woundPart = st.woundPart or {}
+    local worst, worstDrop = nil, 0.5
+    for k, v in pairs(c.part) do
+        local lost = (st.woundPart[k] or v) - v
+        if lost > worstDrop then worst, worstDrop = k, lost end
+        st.woundPart[k] = v
+    end
+    if worst then st.lastWorst = { part = worst, tick = tickNo } end
+    -- a cut on a body part that is whole again has healed
+    for i = #st.wounds, 1, -1 do
+        local wd = st.wounds[i]
+        local seg = SEG_BY_ID[wd.seg]
+        local pct = seg and c.part[seg.parts[1]]
+        if pct and pct >= 97 and tickNo - wd.born > 300 then table.remove(st.wounds, i) end
+    end
+
+    if ReadEmitters(c) or ReadBloodArrays(c) then return end
+    -- Source 3: no emitters and no arrays in this game version. A hit that makes the bleeding rise
+    -- is a cut: on the last damaged bone if the game names one, else on the worst-hit body part.
+    local bleed = type(c.bleed) == "number" and c.bleed or 0
+    if c.drop > 0 and bleed > (st.woundBleed or 0) + 0.05 then
+        local bone, loc = nil, nil
+        if w.lastBone then pcall(function() bone = NameStr(obj[w.lastBone]) end) end
+        if w.hitPoint then pcall(function() loc = Vec(obj[w.hitPoint]) end) end
+        st.woundN = st.woundN + 1
+        local wd = (bone and PlaceWound(obj, bone, loc, st.woundN)) or PartWound(c)
+        LogWound(c, "hit", st.woundN, wd and wd.bone or bone, loc, wd)
+        KeepWound(st, wd)
+        st.woundSrc = "hit"
+    end
+    st.woundBleed = bleed
+end
+
+-- Raw wound data for props_dump.txt (F9)
+local function WoundDiag(target, out)
+    table.insert(out, "")
+    table.insert(out, "=== Wound data")
+    for _, name in ipairs({ "RT_Blood_Bones", "RT_Blood_Locations", "RT_Blood_Normals", "RT-Blood Index", "Attached Blood Emitters",
+                            "Running Blood Array", "Dismembered Bones" }) do
+        local arr = nil
+        pcall(function() arr = target[name] end)
+        local len = arr and ArrLen(arr) or nil
+        local line = string.format("  %-26s length %s", name, tostring(len))
+        if len and name == "Attached Blood Emitters" then
+            for i = math.max(1, len - 2), len do
+                local e, cls, sock, v = nil, nil, nil, nil
+                pcall(function() e = arr[i] end)
+                pcall(function() e = e:get() end)
+                if e and Valid(e) then
+                    cls = ClassName(e)
+                    pcall(function() sock = NameStr(e:GetAttachSocketName()) end)
+                    pcall(function() v = Vec(e:K2_GetComponentLocation()) end)
+                end
+                line = line .. string.format("   [%d] %s socket=%s at %s", i, tostring(cls), tostring(sock),
+                    v and string.format("(%.1f, %.1f, %.1f)", v.X, v.Y, v.Z) or "?")
+            end
+        end
+        if len and name:find("^RT") then
+            for i = math.max(1, len - 2), len do
+                local e = nil
+                pcall(function() e = arr[i] end)
+                local v = Vec(e)
+                line = line .. "   [" .. i .. "] " .. (v and string.format("(%.1f, %.1f, %.1f)", v.X, v.Y, v.Z) or tostring(NameStr(e) or e))
+            end
+        end
+        table.insert(out, line)
+    end
+    for _, name in ipairs({ "Last Damaged Bone", "Body Hit Bone Name", "Last Complex Damage Bone" }) do
+        local v = nil
+        pcall(function() v = NameStr(target[name]) end)
+        table.insert(out, string.format("  %-26s %s", name, tostring(v)))
+    end
+    for _, name in ipairs({ "Body Hit Impact Point", "RT-ImpactPoint" }) do
+        local v = nil
+        pcall(function() v = Vec(target[name]) end)
+        table.insert(out, string.format("  %-26s %s", name, v and string.format("(%.1f, %.1f, %.1f)", v.X, v.Y, v.Z) or "unreadable"))
+    end
+    local bones = {}
+    for _, name in ipairs({ "head", "neck_01", "spine_03", "spine_02", "spine_01", "pelvis", "upperarm_r", "lowerarm_r", "hand_r", "thigh_r", "calf_r", "foot_r" }) do
+        local v = Socket(target, name)
+        table.insert(bones, name .. (v and string.format(" (%.0f, %.0f, %.0f)", v.X, v.Y, v.Z) or " MISSING"))
+    end
+    table.insert(out, "  bones: " .. table.concat(bones, " | "))
+end
+
+-- Everything only the panels show. Read for you and the focused enemy, not for the whole arena:
+-- it is ~40 property reads plus bone lookups per fighter.
+local function ReadDetails(c)
+    if c.full then return c end
+    c.full = true
+    local obj, st, r = c.obj, c.st, c.r
+    for k, name in pairs(r.stats) do if c[k] == nil then c[k] = Read(obj, name) end end
     -- the game uses a 0-100 scale; start there so a fighter first seen hurt still reads correctly
-    for _, k in ipairs({ "hp", "cons", "stamina" }) do
+    for _, k in ipairs({ "cons", "stamina" }) do
         if type(c[k]) == "number" and (st.max[k] == nil or c[k] > st.max[k]) then st.max[k] = math.max(c[k], 100) end
     end
     for k, name in pairs(r.parts) do
@@ -353,10 +807,27 @@ local function ReadCharacter(obj)
     end
     for k, name in pairs(r.broken) do c.broken[k] = Read(obj, name) == true end
     for k, name in pairs(r.disloc) do c.disloc[k] = Read(obj, name) == true end
-    c.isDead = (c.dead == true) or (type(c.hp) == "number" and c.hp <= 0)
 
     -- weight: physics mass of the whole body; gear: armor + weapons; height: head bone to feet
     if tickNo - (st.physTick or -1000) >= 30 then
+        -- loss rates (bleed-out estimate) and wound trends; forget them after a gap in tracking
+        local now = os.clock()
+        if tickNo - (st.physTick or -1000) > 120 then
+            st.trend, st.trendRef, st.rateT, st.hpRate, st.consRate = {}, {}, nil, nil, nil
+        end
+        if st.rateT and now - st.rateT > 0.2 then
+            local dt = now - st.rateT
+            if type(c.hp) == "number" and type(st.rateHp) == "number" then st.hpRate = ((st.hpRate or 0) + (st.rateHp - c.hp) / dt) / 2 end
+            if type(c.cons) == "number" and type(st.rateCons) == "number" then st.consRate = ((st.consRate or 0) + (st.rateCons - c.cons) / dt) / 2 end
+        end
+        st.rateT, st.rateHp, st.rateCons = now, c.hp, c.cons
+        st.trendN = (st.trendN or 0) + 1
+        if st.trendN % 3 == 0 then   -- change in each limb over the last ~3 passes
+            for k, v in pairs(c.part) do
+                st.trend[k] = st.trendRef[k] and (v - st.trendRef[k]) or 0
+                st.trendRef[k] = v
+            end
+        end
         st.physTick = tickNo
         -- GetMass walks every physics body; doing it on a fighter being torn down crashed the game,
         -- so read it once, from a fighter that has been alive for a while
@@ -381,6 +852,37 @@ local function ReadCharacter(obj)
         end
     end
 
+    -- emitters and arrays change only on a hit, so a look every third tick is enough; the hit-based source needs every tick
+    if tickNo % 3 == 0 or not st.woundRead or (st.woundSrc ~= "emitter" and st.woundSrc ~= "array") then ReadWounds(c) end
+
+    for _, s in ipairs(SEGMENTS) do
+        local v = nil
+        for _, p in ipairs(s.parts) do
+            local pv = c.part[p]
+            if pv and (v == nil or pv < v) then v = pv end
+        end
+        c.seg[s.id] = v
+        local prev = st.segPrev[s.id]
+        if v and prev and prev - v > 0.5 then st.flash[s.id] = 1 end
+        st.segPrev[s.id] = v
+        st.flash[s.id] = math.max(0, (st.flash[s.id] or 0) - 0.05)
+    end
+    return c
+end
+
+-- Vitals and hit tracking for any fighter; full = also read the panel details
+local function ReadCharacter(obj, full)
+    local a = Addr(obj)
+    local st = states[a]
+    if not st then st = NewState(); states[a] = st end
+    st.seen = tickNo
+    local r = ResolveClass(obj)
+
+    local c = { obj = obj, st = st, r = r, part = {}, broken = {}, disloc = {}, seg = {} }
+    c.hp, c.dead, c.team = Read(obj, r.stats.hp), Read(obj, r.stats.dead), Read(obj, r.stats.team)
+    if type(c.hp) == "number" and (st.max.hp == nil or c.hp > st.max.hp) then st.max.hp = math.max(c.hp, 100) end
+    c.isDead = (c.dead == true) or (type(c.hp) == "number" and c.hp <= 0)
+
     c.drop, st.newHit = 0, false
     if type(c.hp) == "number" then
         local prev = st.prev.hp
@@ -402,19 +904,7 @@ local function ReadCharacter(obj)
         end
     end
 
-    c.seg = {}
-    for _, s in ipairs(SEGMENTS) do
-        local v = nil
-        for _, p in ipairs(s.parts) do
-            local pv = c.part[p]
-            if pv and (v == nil or pv < v) then v = pv end
-        end
-        c.seg[s.id] = v
-        local prev = st.segPrev[s.id]
-        if v and prev and prev - v > 0.5 then st.flash[s.id] = 1 end
-        st.segPrev[s.id] = v
-        st.flash[s.id] = math.max(0, (st.flash[s.id] or 0) - 0.05)
-    end
+    if full then ReadDetails(c) end
     return c
 end
 
@@ -443,6 +933,9 @@ local function Injuries(c)
             table.insert(tags, string.format("%s %d%%", lbl, math.floor(pct + 0.5)))
             sev = math.max(sev, lsev)
         end
+        local tr = c.st.trend[k]
+        if #tags > 0 and tr and tr > 0.2 then table.insert(tags, "healing")
+        elseif #tags > 0 and tr and tr < -0.2 then table.insert(tags, "worse") end
         if #tags > 0 then table.insert(list, { text = name .. ": " .. table.concat(tags, ", "), sev = sev, rank = rank }) end
     end
     table.sort(list, function(a, b) return a.rank < b.rank end)
@@ -517,7 +1010,7 @@ local function Place(canvas, widget, x, y, w, h, anchor, align)
     return slot
 end
 
-local function ColorKey(c) return string.format("%.2f%.2f%.2f%.2f", c.R, c.G, c.B, c.A) end
+local function SameColor(a, b) return a ~= nil and a.R == b.R and a.G == b.G and a.B == b.B and a.A == b.A end
 
 local function Rect(tree, canvas, x, y, w, h, color, round, anchor, align)
     local img = New("/Script/UMG.Image", tree)
@@ -530,8 +1023,7 @@ local function Rect(tree, canvas, x, y, w, h, color, round, anchor, align)
     end
     local e = { w = img, slot = Place(canvas, img, x, y, w, h, anchor, align) }
     e.SetColor = function(self, c)
-        local k = ColorKey(c)
-        if self.ck ~= k then self.ck = k; pcall(function() self.w:SetColorAndOpacity(c) end) end
+        if not SameColor(self.c, c) then self.c = c; pcall(function() self.w:SetColorAndOpacity(c) end) end
     end
     e:SetColor(color)
     return e
@@ -554,8 +1046,7 @@ local function Label(tree, canvas, x, y, size, color, anchor, align)
         if self.txt ~= s then self.txt = s; pcall(function() self.w:SetText(ToFText(s)) end) end
     end
     e.SetColor = function(self, c)
-        local k = ColorKey(c)
-        if self.ck ~= k then self.ck = k; pcall(function() self.w:SetColorAndOpacity({ SpecifiedColor = c, ColorUseRule = 0 }) end) end
+        if not SameColor(self.c, c) then self.c = c; pcall(function() self.w:SetColorAndOpacity({ SpecifiedColor = c, ColorUseRule = 0 }) end) end
     end
     e:SetColor(color)
     e:SetText("")
@@ -609,11 +1100,44 @@ local function Fmt(v, d)
     return string.format("%." .. (d or 0) .. "f", v)
 end
 
-local function BuildBody(tree, canvas, ox, oy, s)
-    local body = { segs = {} }
+-- The heart is drawn red so it shows on a healthy chest; it darkens as it is damaged and beats
+-- (two quick pulses a second) while the fighter lives
+local HEART_OK   = { R = 0.90, G = 0.12, B = 0.16, A = 0.95 }
+local HEART_BAD  = { R = 0.25, G = 0.02, B = 0.02, A = 0.95 }
+local HEART_BEAT = { R = 1.00, G = 0.55, B = 0.55, A = 1 }
+local HEART_DEAD = { R = 0.22, G = 0.10, B = 0.10, A = 0.90 }
+local function HeartColor(pct, dead)
+    if pct == nil then return COLORS.unknown end
+    if dead then return HEART_DEAD end
+    local col = LerpColor(HEART_BAD, HEART_OK, pct / 100)
+    local t = tickNo % 28
+    if t < 4 or (t >= 7 and t < 11) then col = LerpColor(col, HEART_BEAT, 0.5) end
+    return col
+end
+
+local CUT_COLOR  = { R = 0.50, G = 0.00, B = 0.00, A = 1 }
+local DROP_COLOR = { R = 0.85, G = 0.03, B = 0.03, A = 1 }
+
+local function BuildBody(tree, canvas, ox, oy, s, wounds)
+    local body = { segs = {}, ox = ox, oy = oy, s = s, phase = 0 }
     for _, seg in ipairs(SEGMENTS) do
         body.segs[seg.id] = Rect(tree, canvas, ox + seg.x * s, oy + seg.y * s, seg.w * s, seg.h * s,
             COLORS.unknown, seg.round and math.max(2, seg.round * s) or nil)
+    end
+    if wounds then
+        -- a pool of cut marks (short slanted strokes), each with two drops that fall from it
+        body.marks = {}
+        for i = 1, WOUND_MAX do
+            local m = { drops = {} }
+            m.cut = Rect(tree, canvas, 0, 0, math.max(6, 13 * s), math.max(2, 2.5 * s), CUT_COLOR, nil, nil, { 0.5, 0.5 })
+            pcall(function() m.cut.w:SetRenderTransformAngle((i % 2 == 0) and 35 or -35) end)
+            SetVis(m.cut, false)
+            for d = 1, 2 do
+                m.drops[d] = Rect(tree, canvas, 0, 0, math.max(2, 2.5 * s), math.max(3, 5 * s), DROP_COLOR, 1, nil, { 0.5, 0 })
+                SetVis(m.drops[d], false)
+            end
+            body.marks[i] = m
+        end
     end
     return body
 end
@@ -622,6 +1146,11 @@ local function UpdateBody(body, c)
     local pulse = (math.sin(tickNo * 0.25) + 1) / 2
     for _, seg in ipairs(SEGMENTS) do
         local col = HealthColor(c.seg[seg.id])
+        if seg.heart then
+            col = HeartColor(c.seg[seg.id], c.isDead)
+        elseif seg.shade and c.seg[seg.id] then
+            col = { R = col.R * seg.shade, G = col.G * seg.shade, B = col.B * seg.shade, A = math.min(1, col.A + 0.3) }
+        end
         if seg.broken and c.broken[seg.broken] then
             col = LerpColor(COLORS.broken, COLORS.brokenHi, pulse)
         elseif seg.disloc and c.disloc[seg.disloc] then
@@ -630,6 +1159,35 @@ local function UpdateBody(body, c)
         local f = c.st.flash[seg.id] or 0
         if f > 0 then col = LerpColor(col, COLORS.hitBig, f) end
         body.segs[seg.id]:SetColor(col)
+    end
+    if not body.marks then return end
+    -- cuts where they landed; drops fall from each one while the fighter bleeds, faster with more bleeding
+    local wounds = c.st.wounds
+    local bleed = (not c.isDead and type(c.bleed) == "number") and c.bleed or 0
+    body.phase = body.phase + 0.02 + math.min(bleed, BLEED_MAX) / BLEED_MAX * 0.04
+    for i, m in ipairs(body.marks) do
+        local w = wounds[i]
+        local seg = w and SEG_BY_ID[w.seg]
+        if seg then
+            local x = body.ox + (seg.x + w.fx * seg.w) * body.s
+            local y = body.oy + (seg.y + w.fy * seg.h) * body.s
+            if m.wound ~= w then m.wound = w; SetPos(m.cut, x, y) end
+            m.cut:SetColor(tickNo - w.born < 30 and COLORS.hitLow or CUT_COLOR)   -- a fresh cut flashes
+            SetVis(m.cut, true)
+            for d, drop in ipairs(m.drops) do
+                if bleed > 0.5 then
+                    local ph = (body.phase + i * 0.37 + d * 0.5) % 1
+                    SetPos(drop, x, y + ph * 30 * body.s)
+                    SetOpacity(drop, 1 - ph)
+                    SetVis(drop, true)
+                else
+                    SetVis(drop, false)
+                end
+            end
+        else
+            m.wound = nil
+            SetVis(m.cut, false); SetVis(m.drops[1], false); SetVis(m.drops[2], false)
+        end
     end
 end
 
@@ -722,7 +1280,7 @@ local function BuildStatsPanel(tree, canvas, prefix, isYou)
     local injLine = fs(11) + 5 * s
     local dmgLine = fs(10) + 5 * s
     local colH = #bars * gap + nInj * injLine + (showDmg and (2 * dmgLine + 6 * s) or 0)
-        + (showPhys and (2 * dmgLine + 8 * s) or 0) + (showProg and (3 * gap + 10 * s) or 0)
+        + (showPhys and (3 * dmgLine + 8 * s) or 0) + (showProg and (3 * gap + 10 * s) or 0)
     local hasCol = colH > 0
     local contentH = math.max(showBody and bodyH or 0, colH)
     local w = hasCol and (colX + barW + pad) or (pad * 2 + (showBody and bodyW or 160 * s))
@@ -739,7 +1297,7 @@ local function BuildStatsPanel(tree, canvas, prefix, isYou)
     if isYou then p.hit = Label(tree, p.w, w - pad, pad - 6 * s, fs(20), COLORS.hitBig, nil, { 1, 0 }) end
 
     local cy = pad + titleH
-    if showBody then p.body = BuildBody(tree, p.w, pad, cy, s) end
+    if showBody then p.body = BuildBody(tree, p.w, pad, cy, s, S[prefix .. ".wounds"]) end
     p.bars = {}
     for i, b in ipairs(bars) do
         p.bars[b.key] = BuildBar(tree, p.w, colX, cy + barLabel + (i - 1) * gap, barW, math.max(3, b.h * s), b.color, b.title, fs(10))
@@ -758,7 +1316,8 @@ local function BuildStatsPanel(tree, canvas, prefix, isYou)
     if showPhys then
         p.phys1 = Label(tree, p.w, colX, iy + 8 * s, fs(10), COLORS.gold)
         p.phys2 = Label(tree, p.w, colX, iy + 8 * s + dmgLine, fs(10), COLORS.gold)
-        iy = iy + 8 * s + 2 * dmgLine
+        p.phys3 = Label(tree, p.w, colX, iy + 8 * s + 2 * dmgLine, fs(10), COLORS.dim)
+        iy = iy + 8 * s + 3 * dmgLine
     end
     if showProg then
         local py = iy + 10 * s + barLabel
@@ -771,6 +1330,16 @@ local function BuildStatsPanel(tree, canvas, prefix, isYou)
     return p
 end
 
+-- Seconds until health or consciousness runs out at the current loss rate, while bleeding
+local function BleedEta(c)
+    if c.isDead or type(c.bleed) ~= "number" or c.bleed <= 0.5 then return nil end
+    local st, t = c.st, math.huge
+    if st.hpRate and st.hpRate > 0.05 and type(c.hp) == "number" then t = math.min(t, c.hp / st.hpRate) end
+    if st.consRate and st.consRate > 0.05 and type(c.cons) == "number" then t = math.min(t, c.cons / st.consRate) end
+    if t < 180 then return math.floor(t + 0.5) end
+    return nil
+end
+
 local function UpdateStatsPanel(p, c, title, dmg1, dmg2)
     p.title:SetText(title)
     if p.body then UpdateBody(p.body, c) end
@@ -778,11 +1347,18 @@ local function UpdateStatsPanel(p, c, title, dmg1, dmg2)
     UpdateBar(b.health,  (Pct(c.hp, c.st.max.hp) or 0) / 100, Fmt(c.hp, 0) .. " / " .. Fmt(c.st.max.hp, 0))
     UpdateBar(b.cons,    (Pct(c.cons, c.st.max.cons) or 0) / 100, Fmt(Pct(c.cons, c.st.max.cons), 0) .. "%")
     UpdateBar(b.stamina, (Pct(c.stamina, c.st.max.stamina) or 0) / 100, Fmt(Pct(c.stamina, c.st.max.stamina), 0) .. "%")
+    local energy = type(c.energy) == "number" and c.energy or nil
+    UpdateBar(b.energy,  energy or 0, energy and Fmt(energy * 100, 0) .. "%" or "-")
     UpdateBar(b.pain,    type(c.pain) == "number" and c.pain / 100 or 0, Fmt(c.pain, 1))
     -- Bleeding keeps climbing on corpses, so cap the readout and hide it once dead
     local bleed = (type(c.bleed) == "number" and not c.isDead) and c.bleed or nil
-    UpdateBar(b.bleed, bleed and bleed / 100 or 0, bleed and (bleed > 999 and "999+" or Fmt(bleed, 1)) or "-")
-    if p.inj then UpdateInjuryList(p.inj, Injuries(c)) end
+    local eta = BleedEta(c)
+    UpdateBar(b.bleed, bleed and bleed / BLEED_MAX or 0,
+        bleed and ((bleed > 999 and "999+" or Fmt(bleed, 1)) .. (eta and string.format("   out in ~%d s", eta) or "")) or "-")
+    if p.inj and (p.injSt ~= c.st or tickNo - (p.injTick or -100) >= 6) then
+        p.injSt, p.injTick = c.st, tickNo
+        UpdateInjuryList(p.inj, Injuries(c))
+    end
     if p.dmg1 then p.dmg1:SetText(dmg1 or ""); p.dmg2:SetText(dmg2 or "") end
     if p.phys1 then
         local st = c.st
@@ -791,6 +1367,7 @@ local function UpdateStatsPanel(p, c, title, dmg1, dmg2)
             st.heightCm and string.format("~%.0f cm", st.heightCm) or "-"))
         p.phys2:SetText(string.format("STRENGTH %s     GEAR %s", Fmt(c.muscle, 0),
             st.gearKg and string.format("%.1f kg", st.gearKg) or "-"))
+        p.phys3:SetText(string.format("EXHAUSTION %s     FEAR %s", Fmt(c.exhaust, 2), Fmt(c.fear, 2)))
     end
     if p.prog then
         local function pct(v) return type(v) == "number" and string.format("%.1f%%", v * 100) or "-" end
@@ -908,6 +1485,24 @@ local function BuildHud()
         h.tag = t
     end
 
+    if S["threat.show"] then
+        local ts = S["threat.scale"]
+        local a = POS_ANCHOR[S["threat.pos"]] or { 1, 0.5 }
+        local size = math.max(7, math.floor(11 * ts + 0.5))
+        local line = size + 6 * ts
+        local w, th = 250 * ts, 20 * ts + line * 4
+        local x = (a[1] == 0 and 24 or a[1] == 1 and -24 or 0) + S["threat.offX"]
+        local y = (a[2] == 0 and 24 or a[2] == 1 and -24 or 0) + S["threat.offY"]
+        local t = Panel(tree, canvas, x, y, w, th, a, a)
+        Rect(tree, t.w, 0, 0, w, th, { R = 0.02, G = 0.02, B = 0.02, A = S.bgOpacity }, 8 * ts)
+        local title = Label(tree, t.w, 12 * ts, 10 * ts, size, COLORS.dim)
+        title:SetText("THREATS")
+        t.rows = {}
+        for i = 1, 3 do t.rows[i] = Label(tree, t.w, 12 * ts, 10 * ts + i * line, size, COLORS.text) end
+        SetVis(t, false)
+        h.threat = t
+    end
+
     h.pops = {}
     if S["enemy.numbers"] then
         for i = 1, 8 do
@@ -920,6 +1515,8 @@ local function BuildHud()
 
     h.toast = Label(tree, canvas, 0, 110, 18, COLORS.gold, { 0.5, 0 }, { 0.5, 0 })
     SetOpacity(h.toast, 0)
+    h.recap = Label(tree, canvas, 0, 150, 16, COLORS.text, { 0.5, 0 }, { 0.5, 0 })
+    SetOpacity(h.recap, 0)
 
     h.menu = BuildMenu(tree, canvas)
     SetVis(h.menu, menuOpen)
@@ -936,14 +1533,20 @@ end
 ---------------------------------------------------------------------------
 local projWarned = false
 
+local layoutLib = nil   -- a class default object: the engine never deletes it
+local function LayoutLib()
+    if not Valid(layoutLib) then layoutLib = StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary") end
+    return layoutLib
+end
+
 local function ViewportScale(ctx)
-    local ok, s = pcall(function() return StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary"):GetViewportScale(ctx) end)
+    local ok, s = pcall(function() return LayoutLib():GetViewportScale(ctx) end)
     if ok and type(s) == "number" and s > 0 then return s end
     return 1
 end
 
 local function ViewportSize(ctx)
-    local ok, v = pcall(function() return StaticFindObject("/Script/UMG.Default__WidgetLayoutLibrary"):GetViewportSize(ctx) end)
+    local ok, v = pcall(function() return LayoutLib():GetViewportSize(ctx) end)
     if ok and v then
         local ok2, x, y = pcall(function() return v.X, v.Y end)
         if ok2 and type(x) == "number" and x > 0 then return x, y end
@@ -975,6 +1578,7 @@ local function CrosshairEnemy(player, enemies, pc, radiusFrac)
     local best, bestD = nil, vh * radiusFrac
     for _, c in ipairs(enemies) do
         if c.dist <= FOCUS_RANGE then
+            c.head = c.head or HeadLocation(c.obj)
             local x, y = ToScreenPx(pc, c.head)
             if x then
                 local d = math.sqrt((x - vw / 2) ^ 2 + (y - vh / 2) ^ 2)
@@ -1008,6 +1612,7 @@ local function LockedEnemy(player, enemies, pc)
     if lockAt then
         local best, bestD = nil, 3.0
         for _, c in ipairs(enemies) do
+            if c.dist <= FOCUS_RANGE then c.head = c.head or HeadLocation(c.obj) end
             local d = math.min(Dist(c.head, lockAt), Dist(c.loc, lockAt))
             if d < bestD then best, bestD = c, d end
         end
@@ -1063,8 +1668,10 @@ local function SpawnPop(x, y, amount, color)
 end
 
 local function UpdatePops()
+    local active = false
     for _, p in ipairs(hud.pops) do
         if p.life > 0 then
+            active = true
             p.life = p.life - 0.03
             p.y = p.y - 1.2
             SetPos(p, p.x, p.y)
@@ -1072,6 +1679,7 @@ local function UpdatePops()
             if p.life <= 0 then SetVis(p, false) end
         end
     end
+    return active
 end
 
 ---------------------------------------------------------------------------
@@ -1088,26 +1696,67 @@ local function Summary(c, title)
 end
 
 local function HideCombat()
-    SetVis(hud.you, false); SetVis(hud.enemy, false); SetVis(hud.tag, false)
+    SetVis(hud.you, false); SetVis(hud.enemy, false); SetVis(hud.tag, false); SetVis(hud.threat, false)
 end
 
 -- Level loads and respawns tear fighters down; touching them then crashes the game
 local cooldown = 0
 local lastWorld, lastPawn = nil, nil
 
+-- The main menu, the pause menu and the shops show the mouse cursor; a fight does not. The menu
+-- level also has a fighter standing in it, so "is there a fighter" is not enough to tell.
+local worldName = ""
+local menuSeen = nil
+local cursorSince = nil
+local function InGameMenu()
+    local shown = false
+    pcall(function() shown = UEHelpers.GetPlayerController().bShowMouseCursor == true end)
+    -- in play the cursor shows for about a second every so often; only a cursor that stays is a menu
+    if shown then cursorSince = cursorSince or os.clock() else cursorSince = nil end
+    local menu = (cursorSince ~= nil and os.clock() - cursorSince >= 0.8) or worldName:lower():find("menu") ~= nil
+    if menuSeen ~= menu then
+        menuSeen = menu
+        Log("%s (cursor %s, level %s)", menu and "menu: HUD hidden" or "play: HUD shown", shown and "shown" or "hidden", worldName)
+    end
+    return menu
+end
+
+-- Assigned at the bottom of the file; Tick runs them on the game thread
+local ProcessKeys, DumpProps
+local dumpPending = true   -- one automatic property dump per game session
+local fight = nil          -- the fight in progress: counters at its start, for the recap
+local recap = { text = "", life = 0 }
+local idle = false         -- nothing to animate and no enemy around: Tick skips frames
+local frameNo = 0
+
 local function ResetWorldState(ticks)
     states = {}
     taggedAddr = nil
+    fight = nil
     cooldown = math.max(cooldown, ticks)
 end
 
 local function Tick()
+    frameNo = frameNo + 1
+    local pressed = ProcessKeys and ProcessKeys()
+    if idle and not pressed and not menuOpen and not hudDirty and cooldown == 0 and frameNo % IDLE_SKIP ~= 0 then return end
+    idle = false
     tickNo = tickNo + 1
+    if woundDumpWanted then woundDumpWanted = false; dumpPending = true end   -- first wound: dump the raw wound data too
 
     local world = nil
     pcall(function() world = UEHelpers.GetWorld() end)
     local wAddr = Valid(world) and Addr(world) or nil
-    if wAddr ~= lastWorld then lastWorld = wAddr; ResetWorldState(60) end
+    if wAddr ~= lastWorld then
+        lastWorld = wAddr
+        ResetWorldState(60)
+        worldName = ""
+        pcall(function()
+            local name = world:GetFName():ToString()
+            if type(name) == "string" then worldName = name end
+        end)
+        Log("level: %s", worldName)
+    end
     if cooldown > 0 then
         cooldown = cooldown - 1
         if hud then HideCombat() end
@@ -1130,6 +1779,15 @@ local function Tick()
     SetVis(hud.menu, menuOpen)
     if menuOpen and menuDirty then RenderMenu(hud.menu); menuDirty = false end
 
+    if S.hideInMenus and InGameMenu() then
+        HideCombat()
+        SetOpacity(hud.toast, 0); SetOpacity(hud.recap, 0)
+        toast.life, recap.life, fight = 0, 0, nil
+        fileText = "Fechtbuch: in a menu, HUD hidden"
+        idle = true
+        return
+    end
+
     local player = GetPlayerPawn()
     local pAddr = player and Addr(player) or nil
     if pAddr ~= lastPawn then
@@ -1138,10 +1796,16 @@ local function Tick()
         HideCombat()
         return
     end
-    local me = player and ReadCharacter(player)
+    local me = player and ReadCharacter(player, true)
+    -- Property names change with game updates, so keep a fresh dump for troubleshooting (also F9)
+    if dumpPending and DumpProps and me and type(me.hp) == "number" and (me.st.aliveTicks or 0) >= 60 then
+        dumpPending = false
+        pcall(DumpProps)
+    end
     if not (me and type(me.hp) == "number") or not S.hud then
         HideCombat()
         if not (me and type(me.hp) == "number") then fileText = "Fechtbuch: waiting for your fighter..." end
+        idle = true
         return
     end
 
@@ -1151,22 +1815,26 @@ local function Tick()
     local myLoc = ActorLocation(player)
     local myAddr = Addr(player)
     local enemies = {}
+    local living = 0   -- living enemies within THREAT_RANGE
     for _, o in ipairs(fighters) do
         if Addr(o) ~= myAddr then
             local c = ReadCharacter(o)
             if type(c.hp) == "number" then
-                c.loc = ActorLocation(o)
-                c.head = HeadLocation(o)
-                c.dist = Dist(c.loc or c.head, myLoc)
+                c.loc = ActorLocation(o) or HeadLocation(o)
+                c.dist = Dist(c.loc, myLoc)
                 c.enemy = (c.team == nil or me.team == nil or c.team ~= me.team)
-                if c.enemy and c.drop > 0 then
-                    -- enemies don't fight each other, so their health loss is credited to you
+                -- Since 0.7 factions fight each other, so an enemy's health loss is credited to you
+                -- only within your reach, or on the enemy you tagged
+                if c.enemy and c.drop > 0 and (c.dist <= CREDIT_RANGE or Addr(o) == taggedAddr) then
                     session.dealt = session.dealt + c.drop
                     c.st.dealtTo = c.st.dealtTo + c.drop
                     if c.st.newHit then session.dealtHits = session.dealtHits + 1 end
                     if c.st.curHit > session.maxDealt then session.maxDealt = c.st.curHit end
+                    if fight and c.st.curHit > fight.best then fight.best = c.st.curHit end
                 end
-                if c.enemy and c.isDead and not c.st.dead then session.kills = session.kills + 1 end
+                -- a kill is yours if you hurt them at some point
+                if c.enemy and c.isDead and not c.st.dead and c.st.dealtTo > 0 then session.kills = session.kills + 1 end
+                if c.enemy and not c.isDead and c.dist <= THREAT_RANGE then living = living + 1 end
                 c.st.dead = c.isDead
                 if c.enemy then table.insert(enemies, c) end
             end
@@ -1180,6 +1848,10 @@ local function Tick()
     local pc = nil
     pcall(function() pc = UEHelpers.GetPlayerController() end)
     local focus = PickFocus(player, enemies, pc)
+    if focus then
+        ReadDetails(focus)
+        focus.head = focus.head or HeadLocation(focus.obj)
+    end
 
     if toast.life > 0 then
         hud.toast:SetText(toast.text)
@@ -1187,12 +1859,45 @@ local function Tick()
         SetOpacity(hud.toast, math.min(1, toast.life * 3))
     end
 
+    -- A fight runs from the first living enemy nearby until you fall or nobody is left for ~3 s
+    if not fight and living > 0 and not me.isDead then
+        fight = { t = os.time(), dealt = session.dealt, taken = me.st.taken, hits = session.dealtHits,
+                  kills = session.kills, best = 0, quiet = 0 }
+    end
+    if fight then
+        fight.quiet = living == 0 and fight.quiet + 1 or 0
+        if me.isDead or fight.quiet > 90 then
+            local secs = math.max(0, os.time() - fight.t - (me.isDead and 0 or 3))
+            local dealt, taken = math.max(0, session.dealt - fight.dealt), math.max(0, me.st.taken - fight.taken)
+            if S.recap and (dealt > 0 or taken > 0) then
+                recap.text = string.format("%s   %d:%02d\nDEALT %s   TAKEN %s   HITS %d   BEST HIT %s   KILLS %d",
+                    me.isDead and "YOU FELL" or "FIGHT OVER", math.floor(secs / 60), secs % 60, Fmt(dealt, 0), Fmt(taken, 0),
+                    math.max(0, session.dealtHits - fight.hits), Fmt(fight.best, 0), math.max(0, session.kills - fight.kills))
+                recap.life = 1
+            end
+            fight = nil
+        end
+    end
+    if recap.life > 0 then
+        hud.recap:SetText(recap.text)
+        recap.life = recap.life - 0.005
+        SetOpacity(hud.recap, math.max(0, math.min(1, recap.life * 4)))
+    end
+
     -- your panel
     if hud.you then
         SetVis(hud.you, true)
-        UpdateStatsPanel(hud.you, me, "YOU",
+        local warn = nil
+        if S["you.warn"] and not me.isDead then
+            local consPct = Pct(me.cons, me.st.max.cons)
+            if consPct and consPct < 25 then warn = "LOSING CONSCIOUSNESS"
+            elseif type(me.bleed) == "number" and me.bleed > BLEED_HEAVY then warn = "BLEEDING HEAVILY"
+            elseif type(me.energy) == "number" and me.energy < 0.15 then warn = "OUT OF ENERGY" end
+        end
+        UpdateStatsPanel(hud.you, me, warn and ("YOU - " .. warn) or "YOU",
             string.format("DEALT %s     TAKEN %s", Fmt(session.dealt, 0), Fmt(me.st.taken, 0)),
             string.format("BEST HIT %s     KILLS %d", Fmt(session.maxDealt, 0), session.kills))
+        hud.you.title:SetColor(warn and LerpColor(COLORS.text, COLORS.hitBig, (math.sin(tickNo * 0.3) + 1) / 2) or COLORS.text)
         if hud.you.hit then
             if me.drop > 0 and S["you.hit"] then hud.you.hit:SetText("-" .. Fmt(me.st.curHit, 0)); hud.youHitLife = 1 end
             hud.youHitLife = math.max(0, (hud.youHitLife or 0) - 0.02)
@@ -1205,12 +1910,33 @@ local function Tick()
         if focus then
             SetVis(hud.enemy, true)
             UpdateStatsPanel(hud.enemy, focus,
-                string.format("%s%s  %.1f m", focus.tagged and "TAGGED " or "", focus.isDead and "ENEMY - DEAD" or "ENEMY", focus.dist),
+                string.format("%s%s  %.1f m", focus.tagged and "TAGGED " or "", focus.isDead and (focus.r.kind .. " - DEAD") or focus.r.kind, focus.dist),
                 string.format("YOU DEALT %s     HITS %d", Fmt(focus.st.dealtTo, 0), focus.st.hits),
                 string.format("BEST HIT %s", Fmt(focus.st.maxHit, 0)))
         else
             SetVis(hud.enemy, false)
         end
+    end
+
+    -- nearest living enemies; enemies is sorted living first, then by distance
+    if hud.threat then
+        local vw = ViewportSize(player)
+        local shown = 0
+        for _, c in ipairs(enemies) do
+            if shown >= 3 or c.isDead or c.dist > THREAT_RANGE then break end
+            shown = shown + 1
+            local dir = ""
+            if pc then
+                local x = ToScreenPx(pc, c.loc)
+                dir = (x == nil) and "BEHIND" or (x < 0) and "LEFT" or (x > vw) and "RIGHT" or ""
+            end
+            local row = hud.threat.rows[shown]
+            row:SetText(string.format("%s  %.0f m  %s%%  %s", c.r.kind, c.dist, Fmt(Pct(c.hp, c.st.max.hp), 0), dir))
+            row:SetColor(c.tagged and COLORS.gold or COLORS.text)
+            SetVis(row, true)
+        end
+        for i = shown + 1, 3 do SetVis(hud.threat.rows[i], false) end
+        SetVis(hud.threat, shown > 0)
     end
 
     local scale = ViewportScale(player)
@@ -1240,6 +1966,7 @@ local function Tick()
         end
     end
 
+    local popsActive = false
     if #hud.pops > 0 then
         if focus and focus.drop > 0 then
             local x, y = ToScreenPx(pc, focus.head)
@@ -1254,7 +1981,7 @@ local function Tick()
                 end
             end
         end
-        UpdatePops()
+        popsActive = UpdatePops()
     end
 
     if tickNo % 30 == 0 then
@@ -1270,17 +1997,23 @@ local function Tick()
     for a, st in pairs(states) do
         if tickNo - st.seen > 300 then states[a] = nil end
     end
+
+    idle = not fight and not popsActive and me.drop == 0 and (hud.youHitLife or 0) <= 0
+        and toast.life <= 0 and recap.life <= 0
+        and not (#me.st.wounds > 0 and type(me.bleed) == "number" and me.bleed > 0.5)   -- drops are falling
 end
 
+local writtenText = nil
 local function WriteFile()
+    if fileText == writtenText then return end
     local f = io.open(MOD_DIR .. "\\stats.txt", "w")
-    if f then f:write(fileText); f:close() end
+    if f then f:write(fileText); f:close(); writtenText = fileText end
 end
 
 ---------------------------------------------------------------------------
 -- Property dump (F9)
 ---------------------------------------------------------------------------
-local function DumpProps()
+DumpProps = function()
     local target = GetPlayerPawn()
     if not (target and ResolveClass(target).stats.hp) then
         target = nil
@@ -1296,7 +2029,10 @@ local function DumpProps()
         cls:ForEachProperty(function(prop)
             local n = prop:GetFName():ToString()
             local t = prop:GetClass():GetFName():ToString()
-            local ok, v = pcall(function() return target[n] end)
+            -- read values of plain number/bool properties only; other kinds are listed by name
+            local plain = t:find("Float") or t:find("Double") or t:find("Int") or t:find("Bool") or t:find("Byte")
+            local ok, v = false, nil
+            if plain then ok, v = pcall(function() return target[n] end) end
             if ok and (type(v) == "number" or type(v) == "boolean") then
                 table.insert(out, string.format("  %-16s %-42s = %s", t, n, tostring(v)))
             else
@@ -1305,6 +2041,7 @@ local function DumpProps()
         end)
         cls = cls:GetSuperStruct()
     end
+    pcall(WoundDiag, target, out)
     local f = io.open(MOD_DIR .. "\\props_dump.txt", "w")
     if f then f:write(table.concat(out, "\n")); f:close() end
     Log("dumped %d lines to props_dump.txt", #out)
@@ -1319,7 +2056,7 @@ local function SafeTick()
         fileText = "Fechtbuch error: " .. tostring(err)
         if tickNo % 300 == 1 then Log("tick error: %s", tostring(err)) end
     end
-    if tickNo % 30 == 0 then WriteFile() end
+    if tickNo % 30 == 0 then WriteFile(); FlushWoundLog() end
 end
 
 -- Run entirely on the game thread. LoopAsync + ExecuteInGameThread ran Lua on two threads at
@@ -1371,23 +2108,55 @@ local function MenuChange(dir, enter)
         if it.key == "reset" then S = Defaults()
         elseif it.key == "close" then menuOpen = false; menuDirty = true; return end
     end
+    if it.key == "preset" then ApplyPreset(S.preset) elseif it.type ~= "action" then S.preset = "Custom" end
     Changed()
 end
 
-RegisterKeyBind(Key.HOME, function() menuOpen = not menuOpen; menuDirty = true end)
-RegisterKeyBind(Key.UP_ARROW, function() if menuOpen then MenuMove(-1) end end)
-RegisterKeyBind(Key.DOWN_ARROW, function() if menuOpen then MenuMove(1) end end)
-RegisterKeyBind(Key.LEFT_ARROW, function() if menuOpen then MenuChange(-1) end end)
-RegisterKeyBind(Key.RIGHT_ARROW, function() if menuOpen then MenuChange(1) end end)
-RegisterKeyBind(Key.RETURN, function() if menuOpen then MenuChange(0, true) end end)
+-- Key callbacks do not run on the game thread, and Lua running on two threads at once is what
+-- crashed the game before. So a callback only bumps a counter in this pre-filled table (no
+-- allocation, no game objects); Tick picks the presses up on the game thread.
+local keys = { home = 0, up = 0, down = 0, left = 0, right = 0, enter = 0, z = 0, f7 = 0, f8 = 0, f9 = 0 }
+local function Bind(key, name) RegisterKeyBind(key, function() keys[name] = keys[name] + 1 end) end
 
-RegisterKeyBind(Key.Z, function() zPressed = true end)
-RegisterKeyBind(Key.F7, function() S.hud = not S.hud; Changed() end)
-RegisterKeyBind(Key.F8, function()
-    states = {}
-    session = { dealt = 0, dealtHits = 0, maxDealt = 0, kills = 0 }
-    Log("counters reset")
-end)
-RegisterKeyBind(Key.F9, DumpProps)
+local function Take(name)
+    local v = keys[name]
+    if v > 0 then keys[name] = 0 end
+    return math.min(v, 5)
+end
 
-Log("loaded from %s", MOD_DIR)
+ProcessKeys = function()
+    local any = false
+    for _, v in pairs(keys) do if v > 0 then any = true end end
+    if not any then return false end
+    if Take("home") % 2 == 1 then menuOpen = not menuOpen; menuDirty = true end
+    local up, down, left, right, enter = Take("up"), Take("down"), Take("left"), Take("right"), Take("enter")
+    if menuOpen then
+        for _ = 1, up do MenuMove(-1) end
+        for _ = 1, down do MenuMove(1) end
+        for _ = 1, left do MenuChange(-1) end
+        for _ = 1, right do MenuChange(1) end
+        for _ = 1, enter do MenuChange(0, true) end
+    end
+    if Take("z") > 0 then zPressed = true end
+    if Take("f7") % 2 == 1 then S.hud = not S.hud; Changed() end
+    if Take("f8") > 0 then
+        states = {}
+        session = { dealt = 0, dealtHits = 0, maxDealt = 0, kills = 0 }
+        Log("counters reset")
+    end
+    if Take("f9") > 0 then dumpPending = true end
+    return true
+end
+
+Bind(Key.HOME, "home")
+Bind(Key.UP_ARROW, "up")
+Bind(Key.DOWN_ARROW, "down")
+Bind(Key.LEFT_ARROW, "left")
+Bind(Key.RIGHT_ARROW, "right")
+Bind(Key.RETURN, "enter")
+Bind(Key.Z, "z")
+Bind(Key.F7, "f7")
+Bind(Key.F8, "f8")
+Bind(Key.F9, "f9")
+
+Log("v%s loaded from %s", VERSION, MOD_DIR)
