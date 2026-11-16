@@ -12,7 +12,7 @@
 
 local UEHelpers = require("UEHelpers")
 
-local VERSION      = "1.2.0"
+local VERSION      = "1.2.1"
 
 local TICK_MS      = 33     -- HUD refresh (~30 fps)
 local SCAN_EVERY   = 300    -- look for new fighter classes every N ticks (~10 s)
@@ -28,6 +28,7 @@ local STATS = {
     hp        = { "Health" },
     cons      = { "Consciousness" },
     stamina   = { "Stamina" },
+    energy    = { "SMH Energy" },                              -- 0.7 energy system, 0..1
     pain      = { "Pain" },
     bleed     = { "Bleeding" },
     dead      = { "DED" },
@@ -38,7 +39,7 @@ local STATS = {
     lockFound = { "Lock On Found" },
     muscle    = { "Muscle Power" },
     muscleRate = { "Muscle Rate" },
-    muscleDue = { "Muscle Rate Due" },
+    muscleDue = { "Muscle Rate Due", "Muscle Growth Due" },   -- renamed in 0.7
     wSkill    = { "Weapon Skill (Temp)" },
     wSkillDue = { "Weapon Skill Due (Temp)" },
     bSkill    = { "Body Skill (Temp)" },
@@ -52,6 +53,7 @@ local PARTS = {
     upper = { "Body Upper Health", "Body Health" },
     lower = { "Body Lower Health" },
     back  = { "Back Health" },
+    heart = { "Heart Health" },                                -- new in 0.7
     armR  = { "Arm_R Health" }, armL = { "Arm_L Health" },
     legR  = { "Leg_R Health" }, legL = { "Leg_L Health" },
 }
@@ -66,7 +68,7 @@ local DISLOCATED = {
     legR = { "Leg R Dislocated" }, legL = { "Leg L Dislocated" },
 }
 local REGIONS = {
-    { "head", "Head" }, { "neck", "Neck" }, { "upper", "Chest" }, { "lower", "Abdomen" }, { "back", "Back" },
+    { "head", "Head" }, { "neck", "Neck" }, { "upper", "Chest" }, { "heart", "Heart" }, { "lower", "Abdomen" }, { "back", "Back" },
     { "armR", "Right arm" }, { "armL", "Left arm" }, { "legR", "Right leg" }, { "legL", "Left leg" },
 }
 
@@ -74,7 +76,7 @@ local REGIONS = {
 local SEGMENTS = {
     { id = "head",   x = 46, y = 0,   w = 28, h = 32, parts = { "head" },          broken = "head", round = 14 },
     { id = "neck",   x = 54, y = 33,  w = 12, h = 10, parts = { "neck" },          disloc = "neck" },
-    { id = "chest",  x = 34, y = 44,  w = 52, h = 52, parts = { "upper", "back" }, broken = "back", disloc = "back", round = 6 },
+    { id = "chest",  x = 34, y = 44,  w = 52, h = 52, parts = { "upper", "back", "heart" }, broken = "back", disloc = "back", round = 6 },
     { id = "pelvis", x = 38, y = 97,  w = 44, h = 36, parts = { "lower" },         round = 6 },
     { id = "uArmR",  x = 16, y = 46,  w = 16, h = 46, parts = { "armR" }, broken = "armR", disloc = "armR", round = 6 },
     { id = "fArmR",  x = 12, y = 93,  w = 15, h = 44, parts = { "armR" }, broken = "armR", round = 6 },
@@ -99,6 +101,7 @@ local COLORS = {
     hp       = { R = 0.78, G = 0.10, B = 0.07, A = 0.95 },
     cons     = { R = 0.55, G = 0.75, B = 0.95, A = 0.95 },
     stamina  = { R = 0.95, G = 0.70, B = 0.25, A = 0.95 },
+    energy   = { R = 0.60, G = 0.85, B = 0.35, A = 0.95 },
     pain     = { R = 0.70, G = 0.40, B = 0.90, A = 0.95 },
     bleed    = { R = 0.55, G = 0.00, B = 0.02, A = 0.95 },
     unknown  = { R = 0.45, G = 0.45, B = 0.45, A = 0.30 },
@@ -122,6 +125,7 @@ local BAR_DEFS = {
     { key = "health",  title = "HEALTH",        color = COLORS.hp,      h = 8 },
     { key = "cons",    title = "CONSCIOUSNESS", color = COLORS.cons,    h = 6 },
     { key = "stamina", title = "STAMINA",       color = COLORS.stamina, h = 6 },
+    { key = "energy",  title = "ENERGY",        color = COLORS.energy,  h = 6 },
     { key = "pain",    title = "PAIN",          color = COLORS.pain,    h = 6 },
     { key = "bleed",   title = "BLEEDING",      color = COLORS.bleed,   h = 6 },
 }
@@ -151,6 +155,7 @@ local function PanelItems(prefix, pos, scale)
         { key = prefix .. ".health",   label = "Health bar",        type = "bool",   default = true },
         { key = prefix .. ".cons",     label = "Consciousness bar", type = "bool",   default = true },
         { key = prefix .. ".stamina",  label = "Stamina bar",       type = "bool",   default = true },
+        { key = prefix .. ".energy",   label = "Energy bar",        type = "bool",   default = true },
         { key = prefix .. ".pain",     label = "Pain bar",          type = "bool",   default = true },
         { key = prefix .. ".bleed",    label = "Bleeding bar",      type = "bool",   default = true },
         { key = prefix .. ".injuries", label = "Injury list",       type = "bool",   default = true },
@@ -311,7 +316,7 @@ local function ResolveClass(obj)
         for _, pn in pairs(have) do
             local l = pn:lower()
             if not used[pn] and #extra < 60 and (l:find("energy") or l:find("stamina") or l:find("muscle") or l:find("skill")
-                or l:find("wound") or l:find("heal") or l:find("faction") or l:find("lock")) then
+                or l:find("wound") or l:find("heal") or l:find("faction") or l:find("lock on") or l:find("exhaust") or l:find("fear")) then
                 table.insert(extra, pn)
             end
         end
@@ -805,6 +810,8 @@ local function UpdateStatsPanel(p, c, title, dmg1, dmg2)
     UpdateBar(b.health,  (Pct(c.hp, c.st.max.hp) or 0) / 100, Fmt(c.hp, 0) .. " / " .. Fmt(c.st.max.hp, 0))
     UpdateBar(b.cons,    (Pct(c.cons, c.st.max.cons) or 0) / 100, Fmt(Pct(c.cons, c.st.max.cons), 0) .. "%")
     UpdateBar(b.stamina, (Pct(c.stamina, c.st.max.stamina) or 0) / 100, Fmt(Pct(c.stamina, c.st.max.stamina), 0) .. "%")
+    local energy = type(c.energy) == "number" and c.energy or nil
+    UpdateBar(b.energy,  energy or 0, energy and Fmt(energy * 100, 0) .. "%" or "-")
     UpdateBar(b.pain,    type(c.pain) == "number" and c.pain / 100 or 0, Fmt(c.pain, 1))
     -- Bleeding keeps climbing on corpses, so cap the readout and hide it once dead
     local bleed = (type(c.bleed) == "number" and not c.isDead) and c.bleed or nil

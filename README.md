@@ -8,7 +8,7 @@ A combat HUD mod for **Half Sword** (Steam, Early Access). It shows what the gam
 
 **Your panel** (bottom-left by default)
 - Body diagram: every limb is colored by its health (bone-white → yellow → orange → red → dark red), flashes red when hit, pulses when a bone is broken and turns violet when a joint is dislocated.
-- Bars for health, consciousness, stamina, pain and bleeding.
+- Bars for health, consciousness, stamina, energy, pain and bleeding.
 - Injury list, e.g. `Left arm: BROKEN, Wounded 55%`, plus pain shock and spilled guts.
 - Damage dealt, damage taken, best hit and kills.
 - Weight, height, strength and gear weight.
@@ -55,8 +55,8 @@ Run the installer and choose **2** (Fechtbuch only) or **3** (Fechtbuch and UE4S
 
 ## Notes
 
-- Tested on Half Sword Early Access 0.6.1.5 with the UE4SS experimental build (Unreal Engine 5.4). Version 1.1.0 also loads on 0.7 "The Crypts" with UE4SS v3.0.1 Beta; 1.2.0 has not been played on 0.7 yet.
-- On 0.7 the game no longer has the pending strength gain (`Muscle Rate Due`), so the strength bar shows no pending part. The new energy, wound healing and faction stats are not shown yet: `UE4SS.log` lists their names in a `[Fechtbuch] class ... unmapped:` line, and `docs/hud-upgrades-0.7.md` has the plan for them.
+- Tested on Half Sword Early Access 0.7 "The Crypts" (0.7.0.2) and 0.6.1.5, with UE4SS v3.0.1 Beta (Unreal Engine 5.4).
+- On 0.7 the HUD also shows the new energy stat as a bar and the heart as an injury region. Exhaustion, fear and factions are not shown yet; `docs/hud-upgrades-0.7.md` has the plan for them.
 - Weight is the physics mass of the body and height is measured from the head to the feet, so both are close estimates.
 - Damage dealt counts health lost by enemies, so it assumes enemies don't hurt each other. In 0.7 factions can fight each other, so the total can include damage you didn't deal.
 - The game doesn't expose its own maximum for strength and skill progress; the bars treat 100% as the cap.

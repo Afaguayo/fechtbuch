@@ -2,6 +2,16 @@
 
 Status: proposal, nothing here is built yet. Written 2026-11-15 against Half Sword 0.7.0.2.
 
+## Update after the first 0.7 fight (2026-11-15)
+
+Version 1.2.0 ran in a real fight on 0.7.0.2 and wrote the property dump. Real names found:
+
+- Energy: `SMH Energy` (0 to 1), with `Energy Past`, `Energy Spent`, `Rest` and `Rest Rate`.
+- Pending strength gain: `Muscle Growth Due` (was `Muscle Rate Due`).
+- New: `Heart Health`, `Exhaustion`, `Fear`, `Faction Buff Int`. No per-fighter faction id was found; `Team Int` is still there.
+
+Built in 1.2.1: upgrade 1 (energy bar), the renamed strength gain, and the heart as an injury region. Still open: everything else in the table. `Exhaustion` and `Fear` are good candidates for the enemy tag status line.
+
 ## What 0.7 changed that matters to the HUD
 
 Half Sword 0.7 "The Crypts Update" (2026-11-10, hotfixes 0.7.0.1 and 0.7.0.2) added:
