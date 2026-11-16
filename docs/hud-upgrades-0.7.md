@@ -17,6 +17,12 @@ Status: all ten upgrades are built in version 1.3.0 (2026-11-15), except faction
 | 9 | Fight recap | One card when the fight ends or you fall |
 | 10 | Slower refresh out of combat | Every third tick when no fight is going on |
 
+## Added in 1.4.0: cuts and blood on the body diagram
+
+Each cut is a slanted stroke on the diagram with drops falling from it while the fighter bleeds. The source is `RT_Blood_Bones` and `RT_Blood_Locations`; without them, `Last Damaged Bone` and `Body Hit Impact Point` on a hit that raises bleeding.
+
+Not known until a fight on 1.4.0: whether the stored positions are world positions or offsets from the bone, and what the bone names are. The code handles both and falls back to a spread-out spot on the right bone. `wounds_dump.txt` and the "Wound data" section of `props_dump.txt` record what the game gave, so the placement can be corrected from one fight.
+
 Also added: raw `Exhaustion` and `Fear` values on the physique lines, to learn their scale.
 
 To tune in play: the bleeding threshold (10), the 5 m credit reach, and whether the `Muscle Growth Due` readout is on the same scale as the old one.

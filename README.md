@@ -8,6 +8,7 @@ A combat HUD mod for **Half Sword** (Steam, Early Access). It shows what the gam
 
 **Your panel** (bottom-left by default)
 - Body diagram: every limb is colored by its health (bone-white → yellow → orange → red → dark red), flashes red when hit, pulses when a bone is broken and turns violet when a joint is dislocated.
+- Cuts are drawn on the diagram as short red strokes on the bone that was hit, placed along the limb where the blade landed. While you bleed, drops fall from every cut, faster the more you bleed. Healed cuts disappear.
 - Bars for health, consciousness, stamina, energy, pain and bleeding.
 - Injury list, e.g. `Left arm: BROKEN, Wounded 55%, healing`, plus pain shock and spilled guts. Each wound says whether it is healing or getting worse.
 - Bleed-out estimate next to the bleeding bar (`out in ~12 s`), from how fast health and consciousness are dropping.
@@ -70,6 +71,7 @@ Run the installer and choose **2** (Fechtbuch only) or **3** (Fechtbuch and UE4S
 - Weight is the physics mass of the body and height is measured from the head to the feet, so both are close estimates.
 - The game does not say who hit whom. Damage dealt counts health lost by enemies within 5 m of you, or by the enemy you tagged at any distance, because in 0.7 factions also fight each other. A kill counts if you damaged that enemy before. Hits with thrown or shot weapons on untagged enemies further away are not counted.
 - The bleed-out estimate and the "bleeding heavily" threshold are estimates and have not been tuned in play.
+- Cut positions come from the data the game uses to paint blood on the body (`RT_Blood_Bones`, `RT_Blood_Locations`). The diagram is a flat front view, so a cut on the back shows on the same limb at the same height. Every cut is also written to `wounds_dump.txt` with how it was placed (`world`, `local` or `bone`), to check the placement.
 - The game doesn't expose its own maximum for strength and skill progress; the bars treat 100% as the cap.
 - If the in-game HUD doesn't show, right-click `ue4ss\Mods\Fechtbuch\overlay.ps1` → *Run with PowerShell* for a separate stats window (run the game in borderless/windowed mode).
 
